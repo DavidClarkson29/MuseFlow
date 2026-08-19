@@ -4,6 +4,7 @@ import { useLang } from '../App'
 
 const PORT_R = 5
 const HIT_R  = 14
+const WIRE_CLR = '#8A8A86'
 
 interface Props {
   nodes: CanvasNode[]
@@ -180,7 +181,7 @@ export default function Canvas({
         const [fnId, fpId, tnId, tpId] = pendingWire.isOutput
           ? [pendingWire.fromNodeId, pendingWire.fromPortId, hit.node.id, hit.port.id]
           : [hit.node.id, hit.port.id, pendingWire.fromNodeId, pendingWire.fromPortId]
-        onAddWire({ id:`w-${Date.now()}`, fromNodeId:fnId, fromPortId:fpId, toNodeId:tnId, toPortId:tpId, color:pendingWire.color })
+        onAddWire({ id:`w-${Date.now()}`, fromNodeId:fnId, fromPortId:fpId, toNodeId:tnId, toPortId:tpId, color:WIRE_CLR })
       }
       setPendingWire(null)
     }
@@ -244,13 +245,13 @@ export default function Canvas({
             return (
               <g key={wire.id}>
                 <path d={`M${sx},${sy} C${cx},${sy} ${cx},${ey} ${ex},${ey}`}
-                  fill="none" stroke={wire.color} strokeWidth={5} opacity={0.1}/>
+                  fill="none" stroke={WIRE_CLR} strokeWidth={4} opacity={0.1}/>
                 <path d={`M${sx},${sy} C${cx},${sy} ${cx},${ey} ${ex},${ey}`}
-                  fill="none" stroke={wire.color} strokeWidth={1.8} opacity={0.75}
+                  fill="none" stroke={WIRE_CLR} strokeWidth={1.5} opacity={0.55}
                   style={{ pointerEvents:'stroke', cursor:'pointer' }}
                   onClick={e=>{ e.stopPropagation(); onRemoveWire(wire.id) }}/>
-                <circle cx={sx} cy={sy} r={PORT_R} fill={wire.color} opacity={0.85}/>
-                <circle cx={ex} cy={ey} r={PORT_R} fill={wire.color} opacity={0.85}/>
+                <circle cx={sx} cy={sy} r={PORT_R} fill={WIRE_CLR} opacity={0.75}/>
+                <circle cx={ex} cy={ey} r={PORT_R} fill={WIRE_CLR} opacity={0.75}/>
               </g>
             )
           })}
@@ -294,15 +295,65 @@ export default function Canvas({
         userSelect:'none', zIndex:20,
       }}>
         <ZBtn onClick={() => applyZoom(zoom/1.2, (outerRef.current?.clientWidth??800)/2, (outerRef.current?.clientHeight??600)/2)}>−</ZBtn>
-        <button
-          onClick={() => { setZoom(1); setPanX(60); setPanY(40) }}
-          style={{ padding:'5px 8px', background:'transparent', border:'none', color:'#6A6A66', fontSize:11, fontFamily:"'JetBrains Mono',monospace", fontWeight:500, cursor:'pointer', minWidth:42, textAlign:'center' }}
-        >
-          {zoomPct}%
-        </button>
+        <ZoomInput zoom={zoom} applyZoom={applyZoom} outerRef={outerRef}/>
         <ZBtn onClick={() => applyZoom(zoom*1.2, (outerRef.current?.clientWidth??800)/2, (outerRef.current?.clientHeight??600)/2)}>+</ZBtn>
       </div>
     </div>
+  )
+}
+
+function ZoomInput({ zoom, applyZoom, outerRef }: {
+  zoom: number
+  applyZoom: (newZ: number, fx: number, fy: number) => void
+  outerRef: React.RefObject<HTMLDivElement | null>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [inputVal, setInputVal] = useState('')
+  const zoomPct = Math.round(zoom * 100)
+
+  function commit(val: string) {
+    const raw = val.replace('%', '').trim()
+    const pct = parseFloat(raw)
+    if (!isNaN(pct) && pct > 0) {
+      const cx = (outerRef.current?.clientWidth ?? 800) / 2
+      const cy = (outerRef.current?.clientHeight ?? 600) / 2
+      applyZoom(Math.min(3, Math.max(0.12, pct / 100)), cx, cy)
+    }
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={inputVal}
+        onChange={e => setInputVal(e.target.value)}
+        onBlur={e => commit(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(inputVal) }
+          if (e.key === 'Escape') setEditing(false)
+        }}
+        onPointerDown={e => e.stopPropagation()}
+        style={{
+          width:52, padding:'5px 4px', textAlign:'center',
+          background:'#141413', border:'1px solid #3A3A38', borderRadius:4,
+          color:'#C0C0BC', fontSize:11, fontFamily:"'JetBrains Mono',monospace",
+          fontWeight:500, outline:'none',
+        }}
+      />
+    )
+  }
+
+  return (
+    <button
+      title="点击输入缩放比例"
+      onClick={() => { setInputVal(String(zoomPct)); setEditing(true) }}
+      style={{ padding:'5px 8px', background:'transparent', border:'none', color:'#6A6A66', fontSize:11, fontFamily:"'JetBrains Mono',monospace", fontWeight:500, cursor:'text', minWidth:42, textAlign:'center' }}
+      onMouseEnter={e=>{ e.currentTarget.style.color='#C0C0BC' }}
+      onMouseLeave={e=>{ e.currentTarget.style.color='#6A6A66' }}
+    >
+      {zoomPct}%
+    </button>
   )
 }
 
@@ -388,11 +439,11 @@ function PortCircle({ port, isInput, onPointerDown }: {
         right: isInput ? undefined : -PORT_R,
         top: port.yRel - PORT_R,
         width:PORT_R*2, height:PORT_R*2, borderRadius:'50%',
-        background: hov ? port.color : '#1A1A19',
-        border:`2px solid ${port.color}`,
+        background: hov ? WIRE_CLR : '#1A1A19',
+        border:`2px solid ${WIRE_CLR}`,
         cursor:'crosshair', zIndex:20,
         transition:'background 0.1s, box-shadow 0.1s',
-        boxShadow: hov ? `0 0 8px ${port.color}80` : 'none',
+        boxShadow: hov ? `0 0 8px ${WIRE_CLR}80` : 'none',
       }}
     />
   )
@@ -411,7 +462,7 @@ function NodeContent({ node, isGenerating, onGenerate, onExport }: {
     case 'explore':   return <ExploreContent node={node} isGenerating={isGenerating} onGenerate={onGenerate}/>
     case 'direction': return <DirectionContent node={node}/>
     case 'fuse':      return <FuseContent node={node}/>
-    case 'brief':     return <BriefContent onExport={onExport}/>
+    case 'brief':     return <BriefContent node={node} onExport={onExport}/>
     case 'result':    return <ResultContent node={node} onExport={onExport}/>
     default:          return null
   }
@@ -621,7 +672,17 @@ function ExploreContent({ node, isGenerating, onGenerate }: {
   const [styleFx,   setStyleFx]   = useState(50)
   const [audioFx,   setAudioFx]   = useState(60)
   const [durMode,   setDurMode]   = useState<'auto'|'custom'>('auto')
+  const [lockedDims, setLockedDims] = useState<Set<string>>(new Set(['melody','rhythm']))
   const state = node.state
+
+  function toggleDim(key: string) {
+    setLockedDims(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   function commitBpm(raw: string) {
     const n = parseInt(raw, 10)
@@ -699,7 +760,9 @@ function ExploreContent({ node, isGenerating, onGenerate }: {
         {/* BPM — number input */}
         <Param label={s.bpm}>
           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <button onClick={e=>{ e.stopPropagation(); const v=Math.max(20,bpm-1); setBpm(v); setBpmInput(String(v)) }}
+            <button
+              onPointerDown={e=>e.stopPropagation()}
+              onClick={e=>{ e.stopPropagation(); const v=Math.max(20,bpm-1); setBpm(v); setBpmInput(String(v)) }}
               style={{ width:22, height:22, borderRadius:4, border:'1px solid #2A2A28', background:'#141413',
                 color:'#6A6A66', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
                 fontFamily:"'Inter',sans-serif", flexShrink:0, fontSize:13 }}>−</button>
@@ -707,7 +770,8 @@ function ExploreContent({ node, isGenerating, onGenerate }: {
               type="text" inputMode="numeric" value={bpmInput}
               onChange={e => setBpmInput(e.target.value)}
               onBlur={e => { e.stopPropagation(); commitBpm(bpmInput) }}
-              onKeyDown={e => { if(e.key==='Enter'){ e.preventDefault(); commitBpm(bpmInput) } }}
+              onKeyDown={e => { e.stopPropagation(); if(e.key==='Enter'){ e.preventDefault(); commitBpm(bpmInput) } }}
+              onPointerDown={e=>e.stopPropagation()}
               onClick={e => e.stopPropagation()}
               style={{
                 flex:1, textAlign:'center',
@@ -715,7 +779,9 @@ function ExploreContent({ node, isGenerating, onGenerate }: {
                 color:'#C0C0BC', fontSize:12, fontWeight:600, padding:'3px 4px',
                 fontFamily:"'JetBrains Mono',monospace", outline:'none',
               }}/>
-            <button onClick={e=>{ e.stopPropagation(); const v=Math.min(300,bpm+1); setBpm(v); setBpmInput(String(v)) }}
+            <button
+              onPointerDown={e=>e.stopPropagation()}
+              onClick={e=>{ e.stopPropagation(); const v=Math.min(300,bpm+1); setBpm(v); setBpmInput(String(v)) }}
               style={{ width:22, height:22, borderRadius:4, border:'1px solid #2A2A28', background:'#141413',
                 color:'#6A6A66', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
                 fontFamily:"'Inter',sans-serif", flexShrink:0, fontSize:13 }}>+</button>
@@ -757,14 +823,40 @@ function ExploreContent({ node, isGenerating, onGenerate }: {
           />
         </Param>
 
-        {/* Generate */}
-        {state === 'done' ? (
-          <div style={{ display:'flex', alignItems:'center', gap:6, padding:'8px 10px', background:'#0F2010',
-            border:'1px solid #1F4020', borderRadius:7, marginTop:2, flexShrink:0 }}>
-            <div style={{ width:7, height:7, borderRadius:'50%', background:'#5EC96E', boxShadow:'0 0 6px #5EC96E80' }}/>
-            <span style={{ fontSize:11, color:'#5EC96E', fontWeight:600 }}>{s.generated}</span>
+        {/* Explore dimension locks */}
+        <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+          <span style={{ fontSize:10, color:'#5A5A56', fontWeight:500 }}>{s.exploreDimsTitle}</span>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+            {([
+              { key:'melody',  label:s.dimMelody,  color:'#9B7EFF' },
+              { key:'harmony', label:s.dimHarmony, color:'#6B6EF5' },
+              { key:'rhythm',  label:s.dimRhythm,  color:'#3BBDAF' },
+              { key:'inst',    label:s.dimInst,    color:'#F5A523' },
+              { key:'texture', label:s.dimTexture, color:'#F06090' },
+              { key:'atmos',   label:s.dimAtmos,   color:'#7ABCC2' },
+            ]).map(dim => {
+              const locked = lockedDims.has(dim.key)
+              return (
+                <button key={dim.key}
+                  onClick={e=>{ e.stopPropagation(); toggleDim(dim.key) }}
+                  style={{
+                    display:'flex', alignItems:'center', gap:3,
+                    padding:'2px 7px', borderRadius:4, fontSize:9, fontWeight:600,
+                    cursor:'pointer', fontFamily:"'Inter',sans-serif", transition:'all 0.12s',
+                    background: locked ? dim.color+'18' : 'transparent',
+                    border:`1px solid ${locked ? dim.color+'45' : '#2A2A28'}`,
+                    color: locked ? dim.color : '#3A3A38',
+                  }}>
+                  <span style={{ fontSize:8, opacity:0.8 }}>{locked ? '🔒' : '○'}</span>
+                  {dim.label}
+                </button>
+              )
+            })}
           </div>
-        ) : isGenerating ? (
+        </div>
+
+        {/* Generate */}
+        {isGenerating ? (
           <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'#0F0F20',
             border:'1px solid #202040', borderRadius:7, marginTop:2, flexShrink:0 }}>
             <div style={{ display:'flex', gap:4 }}>
@@ -839,13 +931,30 @@ function TickSl({ value, min, max, onChange, color }: {
         ))}
       </div>
       <input type="range" min={min} max={max} value={value}
-        onChange={e=>onChange(Number(e.target.value))} onClick={e=>e.stopPropagation()}
+        onChange={e=>onChange(Number(e.target.value))}
+        onClick={e=>e.stopPropagation()}
+        onPointerDown={e=>e.stopPropagation()}
         className="tick-slider" style={{ '--slider-color':color } as React.CSSProperties}/>
     </div>
   )
 }
 
 // ── Direction card ─────────────────────────────────────────────────────────────
+
+function DirActionBtn({ label, color, bg }: { label:string; color:string; bg?:string }) {
+  const base = bg ?? color+'14'
+  return (
+    <button
+      onClick={e => e.stopPropagation()}
+      style={{ flex:1, padding:'4px 0', fontSize:9, fontWeight:600, color, background:base,
+        border:`1px solid ${color}28`, borderRadius:5, cursor:'pointer',
+        fontFamily:"'Inter',sans-serif", transition:'background 0.1s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = color+'2A' }}
+      onMouseLeave={e => { e.currentTarget.style.background = base }}
+    >{label}</button>
+  )
+}
 
 function DirectionContent({ node }: { node: CanvasNode }) {
   const s = useLang()
@@ -858,16 +967,24 @@ function DirectionContent({ node }: { node: CanvasNode }) {
           {d.label as string}
         </span>
         <span style={{ fontSize:11, fontWeight:600, color:'#C0C0BC', flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{d.name as string}</span>
+        {!!d.mainDim && (
+          <span style={{ fontSize:8, fontWeight:700, padding:'1px 7px', borderRadius:10,
+            background:color+'18', border:`1px solid ${color}35`, color, flexShrink:0, whiteSpace:'nowrap' }}>
+            {d.mainDim as string}
+          </span>
+        )}
         <span style={{ fontSize:9, fontWeight:600, padding:'1px 6px', borderRadius:10,
-          background:'#1E1E1C', border:'1px solid #2C2C2A', color:'#4A4A48', flexShrink:0 }}>Demo</span>
+          background:'#1E1E1C', border:'1px solid #2C2C2A', color:'#4A4A48', flexShrink:0 }}>{s.demoLabel}</span>
       </div>
-      <div style={{ flex:1, padding:'10px 12px', display:'flex', flexDirection:'column', gap:7, overflow:'hidden' }}>
-        <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+      <div style={{ flex:1, padding:'8px 12px 10px', display:'flex', flexDirection:'column', gap:6, overflow:'hidden' }}>
+        {/* Tags */}
+        <div style={{ display:'flex', alignItems:'center', gap:4, flexWrap:'wrap' }}>
           {(d.tags as string[]).map(t => (
             <span key={t} style={{ fontSize:9, padding:'2px 7px', background:'#222220', borderRadius:20, color:'#5A5A56', fontWeight:500 }}>{t}</span>
           ))}
         </div>
-        <div style={{ height:1, background:'#222220' }}/>
+        <div style={{ height:1, background:'#222220', flexShrink:0 }}/>
+        {/* Properties */}
         <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
           {([
             ['mood',    s.mood],
@@ -881,7 +998,8 @@ function DirectionContent({ node }: { node: CanvasNode }) {
             </div>
           ))}
         </div>
-        <div style={{ marginTop:'auto' }}>
+        {/* Energy */}
+        <div>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
             <span style={{ fontSize:9, color:'#4A4A48' }}>{s.energy}</span>
             <span style={{ fontSize:9, color:'#7A7A76', fontFamily:"'JetBrains Mono',monospace" }}>{d.energy as number}%</span>
@@ -889,6 +1007,11 @@ function DirectionContent({ node }: { node: CanvasNode }) {
           <div style={{ height:3, background:'#222220', borderRadius:2 }}>
             <div style={{ height:'100%', width:`${d.energy as number}%`, background:color, borderRadius:2, opacity:0.8 }}/>
           </div>
+        </div>
+        {/* Action buttons */}
+        <div style={{ marginTop:'auto', display:'flex', gap:4 }}>
+          <DirActionBtn label={s.exploreFurther} color={color}/>
+          <DirActionBtn label={s.addToCompare} color="#7A7A78"/>
         </div>
       </div>
     </>
@@ -899,6 +1022,17 @@ function DirectionContent({ node }: { node: CanvasNode }) {
 
 function FuseContent({ node }: { node: CanvasNode }) {
   const s = useLang()
+  const d = node.data
+  const inheritsA = (d.inheritsA as string[] | undefined) ?? []
+  const inheritsB = (d.inheritsB as string[] | undefined) ?? []
+
+  function TraitChip({ label, color }: { label:string; color:string }) {
+    return (
+      <span style={{ fontSize:9, padding:'2px 7px', borderRadius:12,
+        background:color+'18', border:`1px solid ${color}35`, color, fontWeight:600 }}>{label}</span>
+    )
+  }
+
   return (
     <>
       <div style={{ height:34, flexShrink:0, background:'#141413', borderBottom:'1px solid #2C2C2A',
@@ -906,16 +1040,32 @@ function FuseContent({ node }: { node: CanvasNode }) {
         <span style={{ fontSize:12, color:'#F06090' }}>⊕</span>
         <span style={{ fontSize:11, fontWeight:700, color:'#F06090' }}>{s.hdrFuse}</span>
       </div>
-      <div style={{ flex:1, padding:'10px 12px', display:'flex', flexDirection:'column', gap:8 }}>
-        <div style={{ fontSize:10, color:'#4A4A48', lineHeight:1.6 }}>{s.fuseConnect}</div>
-        <div style={{ marginTop:'auto' }}>
-          {node.inputs.map(p => (
-            <div key={p.id} style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}>
-              <div style={{ width:6, height:6, borderRadius:'50%', border:`2px solid ${p.color}`, flexShrink:0 }}/>
-              <span style={{ fontSize:10, color:'#5A5A56' }}>{p.label}</span>
-              <span style={{ marginLeft:'auto', fontSize:9, color:'#3A3A38' }}>{s.fuseOpen}</span>
-            </div>
-          ))}
+      <div style={{ flex:1, padding:'10px 12px', display:'flex', flexDirection:'column', gap:7 }}>
+        {/* From A */}
+        <div>
+          <div style={{ fontSize:9, color:'#F5A52390', fontWeight:600, marginBottom:4, letterSpacing:'0.04em' }}>{s.fromDirA}</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+            {inheritsA.length > 0 ? inheritsA.map(t => <TraitChip key={t} label={t} color="#F5A523"/>) :
+              <span style={{ fontSize:9, color:'#3A3A38' }}>{s.fuseOpen}</span>}
+          </div>
+        </div>
+        {/* Arrow divider */}
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <div style={{ flex:1, height:1, background:'#1E1E1C' }}/>
+          <span style={{ fontSize:11, color:'#F0609050' }}>⊕</span>
+          <div style={{ flex:1, height:1, background:'#1E1E1C' }}/>
+        </div>
+        {/* From B */}
+        <div>
+          <div style={{ fontSize:9, color:'#7A7A7890', fontWeight:600, marginBottom:4, letterSpacing:'0.04em' }}>{s.fromDirB}</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+            {inheritsB.length > 0 ? inheritsB.map(t => <TraitChip key={t} label={t} color="#7A7A78"/>) :
+              <span style={{ fontSize:9, color:'#3A3A38' }}>{s.fuseOpen}</span>}
+          </div>
+        </div>
+        {/* Output */}
+        <div style={{ marginTop:'auto', padding:'5px 8px', background:'#F0609010', border:'1px solid #F0609025', borderRadius:6 }}>
+          <div style={{ fontSize:9, color:'#F06090', fontWeight:600 }}>{s.fuseOutputLabel}</div>
         </div>
       </div>
     </>
@@ -924,8 +1074,12 @@ function FuseContent({ node }: { node: CanvasNode }) {
 
 // ── Brief ─────────────────────────────────────────────────────────────────────
 
-function BriefContent({ onExport }: { onExport: () => void }) {
+function BriefContent({ node, onExport }: { node: CanvasNode; onExport: () => void }) {
   const s = useLang()
+  const d = node.data
+  const sources = (d.sources as string[] | undefined) ?? []
+  const dirChoice = d.dirChoice as string | undefined
+  const styleTag = d.styleTag as string | undefined
   return (
     <>
       <div style={{ height:34, flexShrink:0, background:'#141413', borderBottom:'1px solid #2C2C2A',
@@ -933,8 +1087,36 @@ function BriefContent({ onExport }: { onExport: () => void }) {
         <span style={{ fontSize:11, color:'#3BBDAF' }}>↗</span>
         <span style={{ fontSize:11, fontWeight:700, color:'#3BBDAF' }}>{s.hdrBrief}</span>
       </div>
-      <div style={{ flex:1, padding:'10px 12px', display:'flex', flexDirection:'column', gap:8 }}>
-        <div style={{ fontSize:10, color:'#4A4A48', lineHeight:1.6 }}>{s.briefConnect}</div>
+      <div style={{ flex:1, padding:'10px 12px', display:'flex', flexDirection:'column', gap:7 }}>
+        {sources.length > 0 ? (
+          <>
+            {/* Sources */}
+            <div>
+              <div style={{ fontSize:9, color:'#5A5A56', fontWeight:600, marginBottom:4, letterSpacing:'0.05em', textTransform:'uppercase' }}>{s.inspoSources}</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+                {sources.map(src => (
+                  <span key={src} style={{ fontSize:9, padding:'2px 7px', background:'#3BBDAF15', border:'1px solid #3BBDAF30', borderRadius:12, color:'#3BBDAF', fontWeight:500 }}>{src}</span>
+                ))}
+              </div>
+            </div>
+            {/* Direction choice */}
+            {dirChoice && (
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <span style={{ fontSize:9, color:'#5A5A56', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.05em' }}>{s.dirChoiceLabel}</span>
+                <span style={{ fontSize:10, color:'#F06090', fontWeight:700 }}>{dirChoice}</span>
+              </div>
+            )}
+            {/* Style summary */}
+            {styleTag && (
+              <div style={{ padding:'5px 8px', background:'#3BBDAF08', border:'1px solid #3BBDAF20', borderRadius:5 }}>
+                <div style={{ fontSize:9, color:'#5A5A56', fontWeight:600, marginBottom:2, textTransform:'uppercase', letterSpacing:'0.05em' }}>{s.styleSummary}</div>
+                <div style={{ fontSize:10, color:'#8ABCC2', fontWeight:500, lineHeight:1.4 }}>{styleTag}</div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize:10, color:'#4A4A48', lineHeight:1.6 }}>{s.briefConnect}</div>
+        )}
         <div style={{ marginTop:'auto' }}>
           <button onClick={e=>{ e.stopPropagation(); onExport() }}
             style={{ width:'100%', padding:'8px', background:'#3BBDAF18', border:'1px solid #3BBDAF40',
@@ -1001,8 +1183,22 @@ function ResultContent({ node, onExport }: { node: CanvasNode; onExport: () => v
         }}>✦</div>
         <span style={{ fontSize:11, fontWeight:700, color:'#3BBDAF', letterSpacing:'-0.01em' }}>{s.hdrResult}</span>
         <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:5 }}>
-          <div style={{ width:5, height:5, borderRadius:'50%', background:'#5EC96E', boxShadow:'0 0 5px #5EC96E70' }}/>
-          <span style={{ fontSize:9, color:'#5EC96E', fontWeight:600 }}>{s.resultDone}</span>
+          {(node.data.status as string | undefined) === 'final' ? (
+            <>
+              <div style={{ width:5, height:5, borderRadius:'50%', background:'#5EC96E', boxShadow:'0 0 5px #5EC96E70' }}/>
+              <span style={{ fontSize:9, color:'#5EC96E', fontWeight:600 }}>{s.resultFinalLabel}</span>
+            </>
+          ) : (node.data.status as string | undefined) === 'draft' ? (
+            <>
+              <div style={{ width:5, height:5, borderRadius:'50%', background:'#7A7A78' }}/>
+              <span style={{ fontSize:9, color:'#7A7A78', fontWeight:600 }}>{s.resultDraftLabel}</span>
+            </>
+          ) : (
+            <>
+              <div style={{ width:5, height:5, borderRadius:'50%', background:'#F5A523', boxShadow:'0 0 5px #F5A52360' }}/>
+              <span style={{ fontSize:9, color:'#F5A523', fontWeight:600 }}>{s.resultCandidateLabel}</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -1077,7 +1273,7 @@ function ResultContent({ node, onExport }: { node: CanvasNode; onExport: () => v
         {/* Metadata pills */}
         <div style={{ flex:1, display:'flex', gap:5, flexWrap:'wrap' }}>
           <Tag label={s.resultFormat}/>
-          <Tag label="City Pop · Cinematic"/>
+          <Tag label="都市流行 · 电影感"/>
         </div>
       </div>
 

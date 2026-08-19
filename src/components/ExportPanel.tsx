@@ -1,6 +1,28 @@
+import { useLang } from '../App'
+
 interface Props { onClose: () => void }
 
 export default function ExportPanel({ onClose }: Props) {
+  const s = useLang()
+
+  const params: [string, string][] = [
+    [s.mood,           'Nostalgic / Bittersweet'],
+    [s.energy,         '68%'],
+    [s.tempoLabel,     '96 BPM'],
+    [s.style,          'City Pop × Cinematic'],
+    [s.texture,        'Warm / Analog + Dark'],
+    [s.rhythm,         'Relaxed → Groovy'],
+    [s.instrumentation,'Electric Piano / Bass / Guitar / Soft Synth / Strings'],
+    [s.referencesLabel,'3 tracks'],
+    [s.origMelodyLabel,'melody-demo.wav'],
+  ]
+
+  const axes = [
+    { label:`${s.acoustic} ←→ ${s.electronic}`, value: 44 },
+    { label:`${s.relaxed} ←→ ${s.intense}`,     value: 68 },
+    { label:`${s.familiar} ←→ ${s.experimental}`, value: 30 },
+  ]
+
   return (
     <div
       style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50, backdropFilter:'blur(4px)' }}
@@ -21,10 +43,10 @@ export default function ExportPanel({ onClose }: Props) {
           <div>
             <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
               <div style={{ width:8, height:8, borderRadius:'50%', background:'#3BBDAF', boxShadow:'0 0 6px #3BBDAF80' }}/>
-              <span style={{ fontSize:11, color:'#3BBDAF', fontWeight:700, letterSpacing:'0.04em', textTransform:'uppercase' }}>Creative Brief</span>
+              <span style={{ fontSize:11, color:'#3BBDAF', fontWeight:700, letterSpacing:'0.04em', textTransform:'uppercase' }}>{s.creativeBrief}</span>
             </div>
-            <div style={{ fontSize:20, fontWeight:700, color:'#F0F0EE', letterSpacing:'-0.03em' }}>Warm Night Drive</div>
-            <div style={{ fontSize:11, color:'#4A4A48', marginTop:2 }}>Hybrid Direction A+B · Night Drive Idea</div>
+            <div style={{ fontSize:20, fontWeight:700, color:'#F0F0EE', letterSpacing:'-0.03em' }}>{s.exportTitle}</div>
+            <div style={{ fontSize:11, color:'#4A4A48', marginTop:2 }}>{s.exportSubtitle}</div>
           </div>
           <button onClick={onClose} style={{
             width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center',
@@ -39,31 +61,21 @@ export default function ExportPanel({ onClose }: Props) {
         <div style={{ flex:1, overflowY:'auto', padding:'16px 18px', display:'flex', flexDirection:'column', gap:16 }}>
           {/* Creative path */}
           <div style={{ display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
-            <PathTag label="Source Materials"/>
+            <PathTag label={s.pathTagSource}/>
             <Arrow/>
-            <PathTag label="Warm City Pop" color="#F5A523"/>
+            <PathTag label={s.pathTagWarmPop} color="#F5A523"/>
             <Arrow/>
-            <PathTag label="More Funky" color="#F5A523"/>
+            <PathTag label={s.pathTagGroovy} color="#F5A523"/>
             <Arrow/>
-            <PathTag label="A+B Hybrid" color="#F06090"/>
+            <PathTag label={s.hybridLabel} color="#F06090"/>
           </div>
 
           {/* Parameters table */}
           <div style={{ border:'1px solid #222220', borderRadius:10, overflow:'hidden' }}>
-            {[
-              ['Mood',            'Nostalgic / Bittersweet'],
-              ['Energy',          '68%'],
-              ['Tempo',           '96 BPM'],
-              ['Style',           'City Pop × Cinematic'],
-              ['Texture',         'Warm / Analog + Dark'],
-              ['Rhythm',          'Relaxed → Groovy'],
-              ['Instrumentation', 'Electric Piano / Bass / Guitar / Soft Synth / Strings'],
-              ['References',      '3 tracks'],
-              ['Original Melody', 'melody-demo.wav'],
-            ].map(([k, v], i, arr) => (
+            {params.map(([k, v], i) => (
               <div key={k} style={{
                 display:'flex', padding:'9px 14px',
-                borderBottom: i < arr.length-1 ? '1px solid #1E1E1C' : 'none',
+                borderBottom: i < params.length-1 ? '1px solid #1E1E1C' : 'none',
                 background: i%2===0 ? '#1E1E1C' : '#1A1A19',
               }}>
                 <span style={{ fontSize:11, color:'#4A4A48', width:130, flexShrink:0 }}>{k}</span>
@@ -72,15 +84,11 @@ export default function ExportPanel({ onClose }: Props) {
             ))}
           </div>
 
-          {/* Tone summary */}
+          {/* Tone axes */}
           <div>
-            <div style={{ fontSize:9, fontWeight:700, color:'#3A3A38', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:8 }}>Tone Axes</div>
+            <div style={{ fontSize:9, fontWeight:700, color:'#3A3A38', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:8 }}>{s.toneAxes}</div>
             <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-              {[
-                { label:'Acoustic ←→ Electronic', value:44 },
-                { label:'Relaxed ←→ Intense', value:68 },
-                { label:'Familiar ←→ Experimental', value:30 },
-              ].map(({ label, value }) => (
+              {axes.map(({ label, value }) => (
                 <div key={label}>
                   <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
                     <span style={{ fontSize:10, color:'#4A4A48' }}>{label}</span>
@@ -97,9 +105,9 @@ export default function ExportPanel({ onClose }: Props) {
 
         {/* Footer */}
         <div style={{ padding:'12px 18px', borderTop:'1px solid #1E1E1C', display:'flex', gap:7, flexShrink:0 }}>
-          <EBtn label="Export Audio" icon="🎵" primary/>
-          <EBtn label="Copy Prompt" icon="📋"/>
-          <EBtn label="Open in DAW" icon="🎛"/>
+          <EBtn label={s.exportAudio} icon="🎵" primary/>
+          <EBtn label={s.copyPrompt} icon="📋"/>
+          <EBtn label={s.openInDAW} icon="🎛"/>
         </div>
       </div>
     </div>

@@ -10,16 +10,18 @@ export default function LeftSidebar({ onAddNode }: Props) {
   const s = useLang()
   const [audioOpen, setAudioOpen] = useState(false)
 
-  const SOURCE_ITEMS = [
+  const INPUT_ITEMS = [
     { type: 'image' as const, icon: '🖼', label: s.nodeImage, color: '#3BBDAF' },
-    { type: 'mood'  as const, icon: '✦',  label: s.nodeMood,  color: '#9B7EFF' },
     { type: 'text'  as const, icon: 'T',  label: s.nodeText,  color: '#6B6EF5' },
+    { type: 'mood'  as const, icon: '✦',  label: s.nodeMood,  color: '#9B7EFF' },
   ]
-  const PROCESS_ITEMS = [
+  const EXPLORE_ITEMS = [
     { type: 'explore' as const, icon: '⬡', label: s.nodeExplore, color: '#6B6EF5' },
     { type: 'fuse'    as const, icon: '⊕', label: s.nodeFuse,    color: '#F06090' },
-    { type: 'brief'   as const, icon: '↗', label: s.nodeBrief,   color: '#3BBDAF' },
-    { type: 'result'  as const, icon: '✦', label: s.nodeResult,  color: '#3BBDAF' },
+  ]
+  const OUTPUT_ITEMS = [
+    { type: 'brief'  as const, icon: '↗', label: s.nodeBrief,  color: '#3BBDAF' },
+    { type: 'result' as const, icon: '✦', label: s.nodeResult, color: '#3BBDAF' },
   ]
 
   return (
@@ -46,11 +48,11 @@ export default function LeftSidebar({ onAddNode }: Props) {
       overflow: 'hidden',
       userSelect: 'none',
     }}>
-      {/* Sources section */}
+      {/* 输入 section */}
       <div style={{ padding: '11px 7px 7px' }}>
-        <SectionLabel>{s.sources}</SectionLabel>
+        <SectionLabel>{s.sideInput}</SectionLabel>
 
-        {SOURCE_ITEMS.map(item => (
+        {INPUT_ITEMS.map(item => (
           <AddRow key={item.type} icon={item.icon} label={item.label} color={item.color}
             onClick={() => onAddNode(item.type)}/>
         ))}
@@ -78,10 +80,22 @@ export default function LeftSidebar({ onAddNode }: Props) {
       {/* Divider */}
       <div style={{ height:1, background:'rgba(48,48,46,0.7)', margin:'0 10px' }}/>
 
-      {/* Process section */}
+      {/* 探索 section */}
+      <div style={{ padding: '7px 7px 7px' }}>
+        <SectionLabel>{s.sideExplore}</SectionLabel>
+        {EXPLORE_ITEMS.map(item => (
+          <AddRow key={item.type} icon={item.icon} label={item.label} color={item.color}
+            onClick={() => onAddNode(item.type)}/>
+        ))}
+      </div>
+
+      {/* Divider */}
+      <div style={{ height:1, background:'rgba(48,48,46,0.7)', margin:'0 10px' }}/>
+
+      {/* 输出 section */}
       <div style={{ padding: '7px 7px 11px' }}>
-        <SectionLabel>{s.process}</SectionLabel>
-        {PROCESS_ITEMS.map(item => (
+        <SectionLabel>{s.sideOutput}</SectionLabel>
+        {OUTPUT_ITEMS.map(item => (
           <AddRow key={item.type} icon={item.icon} label={item.label} color={item.color}
             onClick={() => onAddNode(item.type)}/>
         ))}

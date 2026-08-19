@@ -44,7 +44,7 @@ function makeNode(type: CanvasNode['type'], cx: number, cy: number): CanvasNode 
         outputs:[{id:tag('m'), label:'Mood', dataType:'mood', color:'#9B7EFF', yRel:py(0,1,72)}],
         data:{ tags:['Nostalgic','Urban'] } }
     case 'explore': {
-      const w=280, h=640
+      const w=280, h=700
       return { id, type, x:cx-140, y:cy-260, w, h, visible:true, selected:false, state:'ready',
         inputs:[
           {id:tag('iv'),  label:'Visual',    dataType:'visual',    color:'#3BBDAF', yRel:py(0,5,h,44,20)},
@@ -61,7 +61,7 @@ function makeNode(type: CanvasNode['type'], cx: number, cy: number): CanvasNode 
         data:{label:'AI 探索', mode:'create'} }
     }
     case 'fuse': {
-      const h=164
+      const h=192
       return { id, type, x:cx-98, y:cy-82, w:196, h, visible:true, selected:false,
         inputs:[
           {id:tag('ia'), label:'Direction A', dataType:'direction', color:'#F06090', yRel:py(0,2,h,44,16)},
@@ -93,7 +93,7 @@ function makeNode(type: CanvasNode['type'], cx: number, cy: number): CanvasNode 
 // ── Initial full-pipeline layout ───────────────────────────────────────────
 
 function buildInitialNodes(): CanvasNode[] {
-  const expW=280, expH=640, dirH=220, dirW=212, fuseH=164, briefH=200, resH=380, resW=252
+  const expW=280, expH=700, dirH=260, dirW=212, fuseH=192, briefH=200, resH=380, resW=252
 
   return [
     // Sources
@@ -140,25 +140,25 @@ function buildInitialNodes(): CanvasNode[] {
         {id:'out-keep',   label:'Use',    dataType:'direction', color:'#F5A523', yRel:py(0,2,dirH,44,20)},
         {id:'out-branch', label:'Branch', dataType:'direction', color:'#F5A523', yRel:py(1,2,dirH,44,20)},
       ],
-      data:{ label:'A', name:'暖调都市流行', energy:55, mood:'Nostalgic / Bittersweet', style:'City Pop', texture:'Warm', rhythm:'Relaxed', instrumentation:'Electric Piano / Bass / Clean Guitar', color:'#F5A523', tags:['Groove','Warm texture','Guitar'],
+      data:{ label:'A', name:'暖调都市流行', mainDim:'旋律驱动', energy:55, mood:'Nostalgic / Bittersweet', style:'City Pop', texture:'Warm', rhythm:'Relaxed', instrumentation:'Electric Piano / Bass / Clean Guitar', color:'#F5A523', tags:['Groove','Warm texture','Guitar'],
         lyrics:'夜幕降临，街灯次第亮\n我独自穿行在熟悉的街巷\n风中带着你留下的香气\n让我想起那些好时光\n\n[副歌]\n回不去的昨天，忘不了的脸\n在这城市的夜里慢慢沉淀\n你的笑容是夜色里的光\n照亮我独行的方向' } },
 
-    { id:'dir-b', type:'direction', x:662, y:290, w:dirW, h:dirH, visible:true, selected:false,
+    { id:'dir-b', type:'direction', x:662, y:322, w:dirW, h:dirH, visible:true, selected:false,
       inputs:[{id:'in', label:'From AI', dataType:'direction', color:'#7A7A78', yRel:py(0,1,dirH)}],
       outputs:[
         {id:'out-keep',   label:'Use',    dataType:'direction', color:'#7A7A78', yRel:py(0,2,dirH,44,20)},
         {id:'out-branch', label:'Branch', dataType:'direction', color:'#7A7A78', yRel:py(1,2,dirH,44,20)},
       ],
-      data:{ label:'B', name:'暗色电影', energy:72, mood:'Melancholic / Intense', style:'Cinematic', texture:'Dark', rhythm:'Driving', instrumentation:'Strings / Piano / Low Synth', color:'#7A7A78', tags:['Space','Harmony','Dark atmosphere'],
+      data:{ label:'B', name:'暗色电影', mainDim:'氛围驱动', energy:72, mood:'Melancholic / Intense', style:'Cinematic', texture:'Dark', rhythm:'Driving', instrumentation:'Strings / Piano / Low Synth', color:'#7A7A78', tags:['Space','Harmony','Dark atmosphere'],
         lyrics:'霓虹在雨中模糊成片\n玻璃上折射的光与影\n每一步都像穿越回忆\n找不到你离开的出口\n\n[副歌]\n黑暗里我还在原地等\n等一个不会来的黎明\n记忆像碎片在空气中漂\n拼不回你的轮廓' } },
 
-    { id:'dir-c', type:'direction', x:662, y:540, w:dirW, h:dirH, visible:true, selected:false,
+    { id:'dir-c', type:'direction', x:662, y:610, w:dirW, h:dirH, visible:true, selected:false,
       inputs:[{id:'in', label:'From AI', dataType:'direction', color:'#9B7EFF', yRel:py(0,1,dirH)}],
       outputs:[
         {id:'out-keep',   label:'Use',    dataType:'direction', color:'#9B7EFF', yRel:py(0,2,dirH,44,20)},
         {id:'out-branch', label:'Branch', dataType:'direction', color:'#9B7EFF', yRel:py(1,2,dirH,44,20)},
       ],
-      data:{ label:'C', name:'梦幻电子', energy:44, mood:'Ethereal / Floating', style:'Electronic / Ambient', texture:'Airy', rhythm:'Sparse', instrumentation:'Ambient Synth / Pad / Glitch', color:'#9B7EFF', tags:['Texture','Atmosphere','Space'],
+      data:{ label:'C', name:'梦幻电子', mainDim:'质感驱动', energy:44, mood:'Ethereal / Floating', style:'Electronic / Ambient', texture:'Airy', rhythm:'Sparse', instrumentation:'Ambient Synth / Pad / Glitch', color:'#9B7EFF', tags:['Texture','Atmosphere','Space'],
         lyrics:'（纯音乐 / Instrumental）\n\n无歌词——以环境音效、\n电子合成器及空间混响为主要表达方式' } },
 
     // Fuse — connects dir-a + dir-b
@@ -168,19 +168,19 @@ function buildInitialNodes(): CanvasNode[] {
         {id:'in-b', label:'Direction B', dataType:'direction', color:'#F06090', yRel:py(1,2,fuseH,44,16)},
       ],
       outputs:[{id:'out', label:'Hybrid', dataType:'direction', color:'#F06090', yRel:py(0,1,fuseH)}],
-      data:{ label:'融合' } },
+      data:{ label:'融合', inheritsA:['暖色质感','律动感'], inheritsB:['暗色氛围','电影和声'] } },
 
     // Brief — connected to fuse output
     { id:'brief', type:'brief', x:954, y:378, w:212, h:briefH, visible:true, selected:false,
       inputs:[{id:'in', label:'Direction', dataType:'direction', color:'#3BBDAF', yRel:py(0,1,briefH,44,16)}],
       outputs:[{id:'out', label:'Brief', dataType:'direction', color:'#3BBDAF', yRel:py(0,1,briefH,44,16)}],
-      data:{ label:'创意摘要' } },
+      data:{ label:'创意摘要', sources:['城市图片','哼唱','文字','情绪'], dirChoice:'A + B 融合', styleTag:'都市夜晚 · 温暖暗色交织' } },
 
     // Result audio — the "eye-catching" output card
     { id:'result', type:'result', x:1240, y:60, w:resW, h:resH, visible:true, selected:false,
       inputs:[{id:'in', label:'Brief', dataType:'direction', color:'#3BBDAF', yRel:py(0,1,resH,44,20)}],
       outputs:[],
-      data:{ label:'成品音频', title:'夜晚驾驶 Remix', bpm:96, key:'F# Minor', duration:'3:24',
+      data:{ label:'成品音频', title:'夜晚驾驶 Remix', bpm:96, key:'F# Minor', duration:'3:24', status:'candidate',
         lyrics:'夜幕降临，街灯次第亮\n我独自穿行在这城市的夜里\n霓虹在雨中模糊的边界\n让时光慢慢，慢慢沉淀\n\n[副歌]\n回不去的昨天，忘不了的脸\n黑暗里还有你留下的微光\n你的笑容是夜色里的光\n照亮我独行的方向' } },
   ]
 }

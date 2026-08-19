@@ -187,7 +187,7 @@ function DirectionDetail({ node }: { node: CanvasNode }) {
         </div>
       </Section>
 
-      {d.lyrics && <LyricsSection lyrics={d.lyrics as string} color={color}/>}
+      {!!d.lyrics && <LyricsSection lyrics={d.lyrics as string} color={color}/>}
 
       <Section title={s.tags}>
         <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
@@ -219,7 +219,7 @@ function ResultDetail({ node }: { node: CanvasNode }) {
         <InfoRow label={s.formatLabel} value="Lossless WAV"/>
       </Section>
 
-      {d.lyrics && <LyricsSection lyrics={d.lyrics as string} color="#3BBDAF"/>}
+      {!!d.lyrics && <LyricsSection lyrics={d.lyrics as string} color="#3BBDAF"/>}
     </div>
   )
 }
