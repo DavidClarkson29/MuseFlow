@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { CanvasNode } from '../types'
 import { useLang } from '../App'
+import { nodeThemeColor } from '../theme'
 
 interface Props {
   node: CanvasNode
@@ -108,18 +109,20 @@ function NodeBadge({ node }: { node: CanvasNode }) {
 }
 
 function getNodeMeta(node: CanvasNode): { color: string; icon: string } {
+  const color = nodeThemeColor(node)
+  let icon = '·'
   switch (node.type) {
-    case 'image':     return { color:'#3BBDAF', icon:'🖼' }
-    case 'audio':     return { color:'#F5A523', icon: (node.data.isRef ? '🔗' : '🎤') as string }
-    case 'text':      return { color:'#6B6EF5', icon:'T' }
-    case 'mood':      return { color:'#9B7EFF', icon:'✦' }
-    case 'explore':   return { color:'#6B6EF5', icon:'⬡' }
-    case 'direction': return { color: node.data.color as string, icon:'◈' }
-    case 'fuse':      return { color:'#F06090', icon:'⊕' }
-    case 'brief':     return { color:'#3BBDAF', icon:'↗' }
-    case 'result':    return { color:'#3BBDAF', icon:'✦' }
-    default:          return { color:'#5A5A56', icon:'·' }
+    case 'image':     icon = '🖼'; break
+    case 'audio':     icon = node.data.isRef ? '🔗' : '🎤'; break
+    case 'text':      icon = 'T'; break
+    case 'mood':      icon = '✦'; break
+    case 'explore':   icon = '⬡'; break
+    case 'direction': icon = '◈'; break
+    case 'fuse':      icon = '⊕'; break
+    case 'brief':     icon = '↗'; break
+    case 'result':    icon = '✦'; break
   }
+  return { color, icon }
 }
 
 function NodeDetail({ node }: { node: CanvasNode }) {
@@ -281,9 +284,12 @@ function FuseDetail({ node }: { node: CanvasNode }) {
 function AudioDetail({ node }: { node: CanvasNode }) {
   const s = useLang()
   const typeVal = node.data.isRef ? s.refTrack : node.data.isHum ? s.humRec : s.nodeAudioDesc
+  const nameVal = node.data.isRef && node.data.fileName
+    ? String(node.data.fileName)
+    : String(node.data.label ?? '')
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-      <InfoRow label={s.nameLabel} value={node.data.label as string}/>
+      <InfoRow label={s.nameLabel} value={nameVal}/>
       <InfoRow label={s.durationLabel} value={node.data.duration as string}/>
       <InfoRow label={s.typeLabel} value={typeVal}/>
     </div>

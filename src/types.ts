@@ -1,6 +1,13 @@
 export type NodeType =
   | 'image' | 'audio' | 'text' | 'mood'
+  | 'intent' | 'constraint' | 'question' | 'note'
+  | 'interpretation' | 'field'
+  | 'frame' | 'prompt'
   | 'explore' | 'direction' | 'fuse' | 'brief' | 'result'
+  | 'audioFolder' | 'work' | 'lyrics'
+
+export type DivergeStrategy =
+  | 'close' | 'further' | 'opposite' | 'surprise' | 'removeObvious' | 'blind'
 
 export type DataType = 'visual' | 'audio' | 'text' | 'mood' | 'direction' | 'any'
 
@@ -23,7 +30,7 @@ export interface CanvasNode {
   outputs: Port[]
   visible: boolean
   selected: boolean
-  state?: 'idle' | 'ready' | 'running' | 'done'
+  state?: 'idle' | 'ready' | 'interpreted' | 'running' | 'done'
   data: Record<string, unknown>
 }
 
@@ -34,6 +41,7 @@ export interface Wire {
   toNodeId: string
   toPortId: string
   color: string
+  label?: string
 }
 
 export interface PendingWire {

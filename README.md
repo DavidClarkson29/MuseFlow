@@ -15,6 +15,10 @@ npm run dev
 npm run build
 ```
 
+## Engineering docs
+
+- [Performance and power optimization](docs/PERFORMANCE_OPTIMIZATION.md)
+
 ## Vercel
 
 Import this repository into Vercel. Framework preset: Vite. Build command and output directory are already configured in `vercel.json`.

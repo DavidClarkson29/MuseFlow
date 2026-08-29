@@ -1,43 +1,224 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import type { CanvasNode, Wire, PendingWire, Port } from '../types'
 import { useLang } from '../App'
+import { nodeThemeColor, hexToRgb } from '../theme'
+import { DEMO_CARD_H, DEMO_CARD_W, WORK_CARD_H, WORK_CARD_W } from './canvas/model'
+import type { DemoItem, InboundRef, WorkItem } from './canvas/model'
+import { DirectionContent } from './canvas/DemoCard'
+import { WorkContent } from './canvas/WorkCard'
+import { FrameDemoDrawer, WorkDrawer } from './canvas/Drawers'
+import { NodeHdr } from './canvas/NodeHeader'
+import { LyricsContent } from './canvas/LyricsEditor'
+import { AudioFolderContent } from './canvas/AudioFolder'
+import { LyricsResizeHandle } from './canvas/LyricsResizeHandle'
+import { PortCircle } from './canvas/PortCircle'
+import { WireLayer } from './canvas/WireLayer'
+import { useCanvasViewport } from './canvas/useCanvasViewport'
+import { useNodeDrag } from './canvas/useNodeDrag'
+import { useWireDrag } from './canvas/useWireDrag'
+import { CardContextMenu, canExportNode } from './canvas/CardContextMenu'
+import { emitGuideEvent } from '../guideEvents'
 
-const PORT_R = 5
-const HIT_R  = 14
+export { DEMO_CARD_H, DEMO_CARD_W, WORK_CARD_H, WORK_CARD_W } from './canvas/model'
+export type { DemoItem, InboundRef, WorkItem, WorkSource } from './canvas/model'
+
+const FRAME_CANVAS_W = 520
+const FRAME_HEADER_H = 50
+const FRAME_LYRICS_BAR_H = 32
 const WIRE_CLR = '#8A8A86'
+const EDGE_SNAP_THRESHOLD = 10
+const isAutoEdgePort = (port:{ id:string }) => port.id.includes('-ghost-') || port.id.includes('-auto-edge-')
 
 interface Props {
   nodes: CanvasNode[]
   wires: Wire[]
-  isGenerating: boolean
+  compareIds: string[]
   onSelectNode: (id: string | null) => void
+  onSelectMany: (ids: string[] | null) => void
   onOpenInspector: (id: string) => void
   onUpdatePosition: (id: string, x: number, y: number) => void
+  onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
   onAddWire: (wire: Wire) => void
   onRemoveWire: (wireId: string) => void
-  onGenerate: (nodeId: string) => void
+  onAddPort: (nodeId: string, isInput: boolean, yRel: number, colorHint?: string) => string
+  onRemovePort: (nodeId:string, portId:string) => void
+  onCommit: (dirId: string) => void
+  onCompareToggle: (dirId: string) => void
+  onDivergeFrame: (frameId: string) => void
+  onExtractDemo: (frameId: string, demo: DemoItem, x: number, y: number) => void
+  onCreateAudioFolder: (sourceId: string, targetId: string) => void
+  onGenerateAudioFolder: (folderId: string) => void
+  onExtractWork: (folderId: string, work: WorkItem, x: number, y: number) => void
+  onExtractSource: (folderId: string, source: import('./canvas/model').WorkSource, x: number, y: number) => void
+  onRemoveSource: (folderId: string, sourceId: string) => void
+  onOpenDemoDetail: (id: string) => void
+  onAddFrame: () => void
   onExport: () => void
+  onAddNode: (type: string) => void
+  onViewportChange?: (panX: number, panY: number, zoom: number, width: number, height: number) => void
+  onUpdateNodeSize?: (id: string, w: number, h: number) => void
+  onImportFiles: (files:File[], x:number, y:number) => void
+  onDeleteSelected?: () => void
+  onUpdateGroupPositions?: (updates: Array<{ id:string; x:number; y:number }>) => void
+  focusRequest?: { nodeId:string; selector?:string; token:number }
 }
 
 export default function Canvas({
-  nodes, wires, isGenerating,
-  onSelectNode, onOpenInspector,
-  onUpdatePosition, onAddWire, onRemoveWire,
-  onGenerate, onExport,
+  nodes, wires, compareIds,
+  onSelectNode, onSelectMany, onOpenInspector,
+  onUpdatePosition, onUpdateNodeData, onAddWire, onRemoveWire, onAddPort, onRemovePort,
+  onCommit, onCompareToggle,
+  onDivergeFrame, onExtractDemo, onCreateAudioFolder, onGenerateAudioFolder, onExtractWork, onExtractSource, onRemoveSource, onOpenDemoDetail, onAddFrame,
+  onExport, onAddNode, onViewportChange, onUpdateNodeSize, onImportFiles, onDeleteSelected, onUpdateGroupPositions, focusRequest,
 }: Props) {
   const outerRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
-  const dragRef  = useRef<{ id:string; sx:number; sy:number; nx:number; ny:number } | null>(null)
   const panRef   = useRef<{ sx:number; sy:number; px:number; py:number } | null>(null)
-  const clickRef = useRef<{ id:string; time:number } | null>(null)
   const touchRef = useRef<{ dist:number; zoom:number; px:number; py:number } | null>(null)
+  const { dragRef, beginDrag, positionAt, clearDrag } = useNodeDrag()
+  const groupDragRef = useRef<{ anchorId:string; sx:number; sy:number; members:Array<{ id:string; nx:number; ny:number }> } | null>(null)
 
   const [zoom, setZoom] = useState(1)
   const [panX, setPanX] = useState(60)
   const [panY, setPanY] = useState(40)
-  const [pendingWire, setPendingWire] = useState<PendingWire | null>(null)
+  const {
+    pendingWire, setPendingWire, ghost, setGhost,
+    hoveredWire, setHoveredWire,
+    clearWireDrag,
+  } = useWireDrag()
+
+  const [marquee, setMarquee] = useState<{ x1:number; y1:number; x2:number; y2:number } | null>(null)
+  const marqueeMovedRef = useRef(false)
+  const [groupTargetId, setGroupTargetId] = useState<string | null>(null)
+  const [cardMenu, setCardMenu] = useState<{ node:CanvasNode; x:number; y:number } | null>(null)
+  const [exportToast, setExportToast] = useState<string | null>(null)
+  const [fileDropActive,setFileDropActive] = useState(false)
+  const [guideCamera,setGuideCamera] = useState(false)
+  const exportToastTimerRef = useRef<number | null>(null)
+  useCanvasViewport(outerRef, panX, panY, zoom, onViewportChange)
+
+  useEffect(()=>{
+    if(!focusRequest || !outerRef.current)return
+    const target=nodes.find(node=>node.id===focusRequest.nodeId)
+    const rect=outerRef.current.getBoundingClientRect()
+    const targetElement=focusRequest.selector ? document.querySelector(focusRequest.selector) as HTMLElement|null : null
+    if(!target&&!targetElement)return
+    const availableW=Math.max(420,rect.width-360)
+    const availableH=Math.max(300,rect.height-170)
+    const elementRect=targetElement?.getBoundingClientRect()
+    const targetW=elementRect ? elementRect.width/zoom : target?.w ?? 520
+    const targetH=elementRect ? elementRect.height/zoom : target?.h ?? 360
+    const worldCenterX=elementRect ? (elementRect.left+elementRect.width/2-rect.left-panX)/zoom : (target!.x+target!.w/2)
+    const worldCenterY=elementRect ? (elementRect.top+elementRect.height/2-rect.top-panY)/zoom : (target!.y+target!.h/2)
+    const nextZoom=Math.max(.52,Math.min(.92,availableW/Math.max(targetW,300),availableH/Math.max(targetH,200)))
+    setGuideCamera(true)
+    setZoom(nextZoom)
+    setPanX(rect.width/2-worldCenterX*nextZoom)
+    setPanY(rect.height/2-worldCenterY*nextZoom)
+    const timer=window.setTimeout(()=>setGuideCamera(false),680)
+    return()=>window.clearTimeout(timer)
+  },[focusRequest?.token])
+
+  useEffect(() => {
+    const close = () => setCardMenu(null)
+    const onKey = (e:KeyboardEvent) => { if (e.key === 'Escape') close() }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('resize', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('keydown', onKey)
+      if (exportToastTimerRef.current !== null) window.clearTimeout(exportToastTimerRef.current)
+    }
+  }, [])
+
+  const openCardMenu = (e:React.MouseEvent, node:CanvasNode) => {
+    if (!canExportNode(node) || !outerRef.current) return
+    e.preventDefault()
+    e.stopPropagation()
+    const rect = outerRef.current.getBoundingClientRect()
+    const menuW = 206, menuH = 44
+    setCardMenu({
+      node,
+      x:Math.max(8, Math.min(e.clientX-rect.left, rect.width-menuW-8)),
+      y:Math.max(8, Math.min(e.clientY-rect.top, rect.height-menuH-8)),
+    })
+    if (nodes.some(item=>item.id===node.id)) onSelectNode(node.id)
+  }
+
+  const showExportToast = (fileName:string) => {
+    setExportToast(`${langS.cardExportDone} · ${fileName}`)
+    if (exportToastTimerRef.current !== null) window.clearTimeout(exportToastTimerRef.current)
+    exportToastTimerRef.current = window.setTimeout(() => setExportToast(null), 2200)
+  }
 
   const visibleNodes = nodes.filter(n => n.visible)
+  const isFolderSeed = (n: CanvasNode) =>
+    (n.type === 'audio' && (!!n.data.isHum || !!n.data.isRef)) ||
+    (n.type === 'direction' && !!n.data.demo) ||
+    n.type === 'work'
+  const resolveGroupTarget = (sourceId: string, sourceX: number, sourceY: number): CanvasNode | null => {
+    const source = visibleNodes.find(n => n.id === sourceId)
+    if (!source || !isFolderSeed(source)) return null
+    const cx = sourceX + source.w/2, cy = sourceY + source.h/2
+    // 黑板内音频互叠不触发创作夹
+    const frames = visibleNodes.filter(n => n.type === 'frame')
+    const isInsideFrame = (x:number, y:number) => frames.some(f => x > f.x && x < f.x + FRAME_CANVAS_W && y > f.y && y < f.y + f.h)
+    const sourceInside = isInsideFrame(cx, cy)
+    const candidate = visibleNodes
+      .filter(n => n.id !== sourceId && (isFolderSeed(n) || n.type === 'audioFolder'))
+      .map(n => ({ n, d:Math.hypot(cx-(n.x+n.w/2),cy-(n.y+n.h/2)) }))
+      .filter(({ n, d }) => d < Math.min(150, Math.max(86,(source.w+n.w)*0.38)))
+      .sort((a,b)=>a.d-b.d)[0]?.n ?? null
+    if (candidate && sourceInside) {
+      const tx = candidate.x + candidate.w/2, ty = candidate.y + candidate.h/2
+      if (isInsideFrame(tx, ty)) return null
+    }
+    return candidate
+  }
+  const langS = useLang()
+  const wireLabel = (raw: string | undefined): string | undefined => {
+    if (!raw) return undefined
+    const map: Record<string, string> = {
+      '__L_INSPIRED__': langS.lInspired,
+      '__L_PRESERVE__': langS.lPreserve,
+      '__L_INTERPRET__': langS.lInterpretW,
+      '__L_BRANCH__': langS.branchFrom,
+      '__L_FUSE__': langS.actFuse,
+    }
+    return map[raw] ?? raw
+  }
+
+  const zoomRef = useRef(zoom); zoomRef.current = zoom
+  const panSyncRef = useRef({ x: panX, y: panY }); panSyncRef.current = { x: panX, y: panY }
+  const zTargetRef = useRef<number | null>(null)
+  const zAnchorRef = useRef<{ x:number; y:number } | null>(null)
+  const zRafRef = useRef<number | null>(null)
+
+  const animateZoomTo = useCallback(() => {
+    if (zRafRef.current !== null) return
+    const step = () => {
+      const t = zTargetRef.current, a = zAnchorRef.current
+      if (t == null || !a) { zRafRef.current = null; return }
+      const z0 = zoomRef.current, p0 = panSyncRef.current
+      const nz = Math.abs(t - z0) < 0.0004 ? t : z0 + (t - z0) * 0.28
+      const ratio = nz / z0
+      setZoom(nz)
+      setPanX(a.x - (a.x - p0.x) * ratio)
+      setPanY(a.y - (a.y - p0.y) * ratio)
+      if (nz === t) { zTargetRef.current = null; zRafRef.current = null; return }
+      zRafRef.current = requestAnimationFrame(step)
+    }
+    zRafRef.current = requestAnimationFrame(step)
+  }, [])
+
+  const pinchZoom = useCallback((factor: number, fx: number, fy: number) => {
+    const base = zTargetRef.current ?? zoomRef.current
+    zTargetRef.current = Math.min(3, Math.max(0.12, base * factor))
+    zAnchorRef.current = { x: fx, y: fy }
+    animateZoomTo()
+  }, [animateZoomTo])
 
   const applyZoom = useCallback((newZ: number, fx: number, fy: number) => {
     newZ = Math.min(3, Math.max(0.12, newZ))
@@ -49,24 +230,47 @@ export default function Canvas({
     })
   }, [])
 
+  const gestureScaleRef = useRef<number | null>(null)
+  const mousePosRef = useRef<{ x:number; y:number } | null>(null)
+
   useEffect(() => {
     const el = outerRef.current!
+    // 滚轮 / 触控板：捏合(ctrl+wheel)用指数系数，平滑且与事件频率无关
     const onWheel = (e: WheelEvent) => {
-      // Let scrollable node content (e.g. explore panel) scroll naturally
       const target = e.target as HTMLElement
       if (target.closest('.explore-scroll')) return
       e.preventDefault()
+      const r = el.getBoundingClientRect()
       if (e.ctrlKey || e.metaKey) {
-        const r = el.getBoundingClientRect()
-        applyZoom(zoom * (e.deltaY < 0 ? 1.08 : 0.93), e.clientX - r.left, e.clientY - r.top)
+        const factor = Math.min(1.12, Math.max(0.92, Math.exp(-e.deltaY * 0.012)))
+        pinchZoom(factor, e.clientX - r.left, e.clientY - r.top)
       } else {
-        setPanX(px => px - e.deltaX)
-        setPanY(py => py - e.deltaY)
+        const k = e.deltaMode === 1 ? 16 : 1
+        setPanX(px => px - e.deltaX * k)
+        setPanY(py => py - e.deltaY * k)
       }
     }
+    // Safari 原生捏合手势
+    const onGestureChange = (ev: Event) => {
+      ev.preventDefault()
+      const g = ev as WheelEvent & { scale: number }
+      const prev = gestureScaleRef.current
+      if (prev && prev > 0) {
+        const r = el.getBoundingClientRect()
+        pinchZoom(g.scale / prev, g.clientX - r.left, g.clientY - r.top)
+      }
+      gestureScaleRef.current = g.scale
+    }
+    const onGestureEnd = () => { gestureScaleRef.current = null }
     el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [zoom, applyZoom])
+    el.addEventListener('gesturechange', onGestureChange)
+    el.addEventListener('gestureend', onGestureEnd)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('gesturechange', onGestureChange)
+      el.removeEventListener('gestureend', onGestureEnd)
+    }
+  }, [pinchZoom])
 
   function getTouchDist(t: React.TouchList) {
     const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY
@@ -98,8 +302,12 @@ export default function Canvas({
   function handleTouchEnd() { touchRef.current = null }
 
   function toCanvas(sx: number, sy: number) {
-    const r = outerRef.current!.getBoundingClientRect()
-    return { x:(sx-r.left-panX)/zoom, y:(sy-r.top-panY)/zoom }
+    const outer = outerRef.current!
+    const r = outer.getBoundingClientRect()
+    return {
+      x:(sx-r.left+outer.scrollLeft-panX)/zoom,
+      y:(sy-r.top+outer.scrollTop-panY)/zoom,
+    }
   }
 
   function portAbs(node: CanvasNode, port: Port, isInput: boolean) {
@@ -110,9 +318,11 @@ export default function Canvas({
     for (const node of visibleNodes) {
       const ports = needInput ? node.inputs : node.outputs
       for (const port of ports) {
+        if (isAutoEdgePort(port)) continue
         const abs = portAbs(node, port, needInput)
         const dx = cx-abs.x, dy = cy-abs.y
-        if (Math.sqrt(dx*dx+dy*dy) <= HIT_R) {
+        // 只接受指针实际落在显式端口上的操作，不扩大命中范围做磁性吸附。
+        if (Math.sqrt(dx*dx+dy*dy) <= 6) {
           const ok = !fromDT || port.dataType===fromDT || port.dataType==='any' || fromDT==='any'
           if (ok) return { node, port }
         }
@@ -126,19 +336,35 @@ export default function Canvas({
       panRef.current = { sx:e.clientX, sy:e.clientY, px:panX, py:panY }
       ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
       e.preventDefault()
+      return
+    }
+    if (e.button === 0) {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-node]') || t.closest('button') || t.closest('input') || t.closest('textarea')) return
+      const c = toCanvas(e.clientX, e.clientY)
+      setMarquee({ x1:c.x, y1:c.y, x2:c.x, y2:c.y })
+      marqueeMovedRef.current = false
+      ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
     }
   }
 
   function startNodeDrag(e: React.PointerEvent, node: CanvasNode) {
+    if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
-    dragRef.current = { id:node.id, sx:e.clientX, sy:e.clientY, nx:node.x, ny:node.y }
-    ;(e.target as Element).setPointerCapture(e.pointerId)
-    const now = Date.now()
-    if (clickRef.current?.id === node.id && now - clickRef.current.time < 350) {
-      onOpenInspector(node.id); clickRef.current = null
-    } else {
-      clickRef.current = { id:node.id, time:now }; onSelectNode(node.id)
+    const selectedCount = visibleNodes.filter(n => n.selected).length
+    const isInGroup = node.selected && selectedCount > 1 && !!onUpdateGroupPositions
+    if (isInGroup) {
+      const members = visibleNodes.filter(n => n.selected).map(n => ({ id:n.id, nx:n.x, ny:n.y }))
+      groupDragRef.current = { anchorId: node.id, sx: e.clientX, sy: e.clientY, members }
+      beginDrag(node, e.clientX, e.clientY)
+      ;(e.target as Element).setPointerCapture(e.pointerId)
+      // 保持多选状态，不切换为单选
+      return
     }
+    groupDragRef.current = null
+    beginDrag(node, e.clientX, e.clientY)
+    ;(e.target as Element).setPointerCapture(e.pointerId)
+    onSelectNode(node.id)
   }
 
   function startPortDrag(e: React.PointerEvent, node: CanvasNode, port: Port, isOutput: boolean) {
@@ -153,55 +379,212 @@ export default function Canvas({
     ;(e.target as Element).setPointerCapture(e.pointerId)
   }
 
+  function handleGhostPointerDown(e:React.PointerEvent) {
+    if (!ghost) return
+    e.stopPropagation()
+    e.preventDefault()
+    const node = nodes.find(item => item.id === ghost.nodeId)
+    if (!node) return
+    const portId = onAddPort(node.id,ghost.isInput,ghost.yRel,ghost.color)
+    const { x,y } = toCanvas(e.clientX,e.clientY)
+    setPendingWire({
+      fromNodeId:node.id,
+      fromPortId:portId,
+      isOutput:!ghost.isInput,
+      startX:ghost.isInput ? node.x : node.x+node.w,
+      startY:node.y+ghost.yRel,
+      mouseX:x,
+      mouseY:y,
+      color:ghost.color,
+    })
+    setGhost(null)
+    ;(e.target as Element).setPointerCapture(e.pointerId)
+  }
+
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    mousePosRef.current = { x: e.clientX, y: e.clientY }
+    setMarquee(prev => {
+      if (!prev) return prev
+      const c = toCanvas(e.clientX, e.clientY)
+      return { ...prev, x2:c.x, y2:c.y }
+    })
     if (panRef.current) {
       const { sx, sy, px, py } = panRef.current
-      setPanX(px + e.clientX - sx); setPanY(py + e.clientY - sy); return
+      setPanX(px + e.clientX - sx); setPanY(py + e.clientY - sy);
+      if (ghost) setGhost(null)
+      return
+    }
+    if (groupDragRef.current && onUpdateGroupPositions) {
+      const g = groupDragRef.current
+      const dx = (e.clientX - g.sx) / zoom
+      const dy = (e.clientY - g.sy) / zoom
+      const updates = g.members.map(m => ({ id: m.id, x: m.nx + dx, y: m.ny + dy }))
+      onUpdateGroupPositions(updates)
+      if (ghost) setGhost(null)
+      if (groupTargetId) setGroupTargetId(null)
+      return
     }
     if (dragRef.current) {
-      const { id, sx, sy, nx, ny } = dragRef.current
-      onUpdatePosition(id, nx + (e.clientX-sx)/zoom, ny + (e.clientY-sy)/zoom); return
+      const next = positionAt(e.clientX, e.clientY, zoom)!
+      onUpdatePosition(next.id, next.x, next.y)
+      const nextTarget = resolveGroupTarget(next.id, next.x, next.y)
+      setGroupTargetId(prev => prev === nextTarget?.id ? prev : (nextTarget?.id ?? null))
+      if (ghost) setGhost(null)
+      return
     }
     if (pendingWire) {
       const { x, y } = toCanvas(e.clientX, e.clientY)
       setPendingWire(pw => pw ? { ...pw, mouseX:x, mouseY:y } : null)
+      if (ghost) setGhost(null)
+      return
     }
-  }, [pendingWire, onUpdatePosition, panX, panY, zoom])
+    // 鼠标靠近磁贴边缘时显示唯一的临时连接入口；不会写入持久端口。
+    const { x:cx,y:cy } = toCanvas(e.clientX,e.clientY)
+    let best: { nodeId:string; isInput:boolean; yRel:number; color:string; distance:number } | null = null
+    for (const node of visibleNodes) {
+      const leftDistance = Math.abs(cx-node.x)
+      const rightDistance = Math.abs(cx-(node.x+node.w))
+      const distance = Math.min(leftDistance,rightDistance)
+      if (distance >= 18 || (best && distance >= best.distance)) continue
+      if (cy < node.y+8 || cy > node.y+node.h-8) continue
+      const isInput = leftDistance <= rightDistance
+      if (node.type === 'result' && !isInput) continue
+      const yRel = Math.max(42,Math.min(node.h-12,cy-node.y))
+      const explicitPorts = (isInput ? node.inputs : node.outputs).filter(port => !isAutoEdgePort(port))
+      if (explicitPorts.some(port => Math.abs(port.yRel-yRel) < 14)) continue
+      best = { nodeId:node.id, isInput, yRel, color:WIRE_CLR, distance }
+    }
+    setGhost(current => {
+      if (!best) return current ? null : current
+      if (current && current.nodeId===best.nodeId && current.isInput===best.isInput && Math.abs(current.yRel-best.yRel)<.5) return current
+      const node = visibleNodes.find(item => item.id === best.nodeId)
+      return { ...best, color:node ? nodeThemeColor(node) : WIRE_CLR }
+    })
+  }, [pendingWire, ghost, onUpdatePosition, onUpdateGroupPositions, panX, panY, zoom, visibleNodes, groupTargetId])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (marquee) {
+      const x1 = Math.min(marquee.x1, marquee.x2), x2 = Math.max(marquee.x1, marquee.x2)
+      const y1 = Math.min(marquee.y1, marquee.y2), y2 = Math.max(marquee.y1, marquee.y2)
+      const moved = (x2-x1)*zoom + (y2-y1)*zoom > 10
+      setMarquee(null)
+      marqueeMovedRef.current = moved
+      if (moved) {
+        const hits = visibleNodes
+          .filter(n => n.type !== 'field' && n.x + n.w > x1 && n.x < x2 && n.y + n.h > y1 && n.y < y2)
+          .map(n => n.id)
+        onSelectMany(hits.length ? hits : null)
+      }
+      return
+    }
     if (panRef.current) { panRef.current = null; return }
-    if (dragRef.current) { dragRef.current = null; return }
+    if (groupDragRef.current) {
+      groupDragRef.current = null
+      clearDrag()
+      setGroupTargetId(null)
+      return
+    }
+    if (dragRef.current) {
+      const final = positionAt(e.clientX, e.clientY, zoom)!
+      const target = resolveGroupTarget(final.id, final.x, final.y)
+      clearDrag()
+      setGroupTargetId(null)
+      if (target) onCreateAudioFolder(final.id, target.id)
+      return
+    }
     if (pendingWire) {
       const { x, y } = toCanvas(e.clientX, e.clientY)
       const needInput = pendingWire.isOutput
       const fromNode  = nodes.find(n => n.id === pendingWire.fromNodeId)
       const fromPort  = (pendingWire.isOutput ? fromNode?.outputs : fromNode?.inputs)?.find(p => p.id===pendingWire.fromPortId)
       const hit = findPortAt(x, y, needInput, fromPort?.dataType)
+      let connected = false
       if (hit && hit.node.id !== pendingWire.fromNodeId) {
         const [fnId, fpId, tnId, tpId] = pendingWire.isOutput
           ? [pendingWire.fromNodeId, pendingWire.fromPortId, hit.node.id, hit.port.id]
           : [hit.node.id, hit.port.id, pendingWire.fromNodeId, pendingWire.fromPortId]
         onAddWire({ id:`w-${Date.now()}`, fromNodeId:fnId, fromPortId:fpId, toNodeId:tnId, toPortId:tpId, color:WIRE_CLR })
+        connected = true
+      } else {
+        let best: { nodeId:string; yRel:number; color:string; distance:number } | null = null
+        for (const node of visibleNodes) {
+          if (node.id === pendingWire.fromNodeId) continue
+          if (node.type === 'result' && !needInput) continue
+          const distance = needInput ? Math.abs(x-node.x) : Math.abs(x-(node.x+node.w))
+          if (distance >= EDGE_SNAP_THRESHOLD || (best && distance >= best.distance)) continue
+          if (y < node.y+8 || y > node.y+node.h-8) continue
+          best = {
+            nodeId:node.id,
+            yRel:Math.max(42,Math.min(node.h-12,y-node.y)),
+            color:WIRE_CLR,
+            distance,
+          }
+        }
+        if (best) {
+          const newPortId = onAddPort(best.nodeId,needInput,best.yRel,best.color)
+          const [fnId,fpId,tnId,tpId] = pendingWire.isOutput
+            ? [pendingWire.fromNodeId,pendingWire.fromPortId,best.nodeId,newPortId]
+            : [best.nodeId,newPortId,pendingWire.fromNodeId,pendingWire.fromPortId]
+          onAddWire({ id:`w-${Date.now()}`, fromNodeId:fnId, fromPortId:fpId, toNodeId:tnId, toPortId:tpId, color:WIRE_CLR })
+          connected = true
+        }
       }
-      setPendingWire(null)
+      if (!connected && isAutoEdgePort({ id:pendingWire.fromPortId })) {
+        onRemovePort(pendingWire.fromNodeId,pendingWire.fromPortId)
+      }
+      clearWireDrag()
     }
-  }, [pendingWire, nodes, onAddWire, panX, panY, zoom])
+  }, [pendingWire, nodes, visibleNodes, onAddWire, onAddPort, onRemovePort, onCreateAudioFolder, panX, panY, zoom, marquee, onSelectMany])
 
-  const handleCanvasClick = useCallback(() => { onSelectNode(null) }, [onSelectNode])
+  const handleCanvasClick = useCallback(() => {
+    if (marqueeMovedRef.current) { marqueeMovedRef.current = false; return }
+    onSelectNode(null)
+  }, [onSelectNode])
   const zoomPct = Math.round(zoom * 100)
   // Infinite canvas: background lives on the outer div and tracks pan+zoom
   const dotPx  = 28 * zoom
   const bgX    = ((panX % dotPx) + dotPx) % dotPx
   const bgY    = ((panY % dotPx) + dotPx) % dotPx
 
+  const snapTarget = (() => {
+    if (!pendingWire) return null
+    const needInput = pendingWire.isOutput
+    const fromNode = nodes.find(node => node.id === pendingWire.fromNodeId)
+    const fromPort = (pendingWire.isOutput ? fromNode?.outputs : fromNode?.inputs)?.find(port => port.id === pendingWire.fromPortId)
+    const hit = findPortAt(pendingWire.mouseX,pendingWire.mouseY,needInput,fromPort?.dataType)
+    if (!hit || hit.node.id === pendingWire.fromNodeId) return null
+    const abs = portAbs(hit.node,hit.port,needInput)
+    return { nodeId:hit.node.id, portId:hit.port.id, x:abs.x, y:abs.y, color:hit.port.color }
+  })()
+
+  const edgeSnap = (() => {
+    if (!pendingWire || snapTarget) return null
+    const needInput = pendingWire.isOutput
+    const mx = pendingWire.mouseX
+    const my = pendingWire.mouseY
+    let best: { nodeId:string; yRel:number; x:number; y:number; color:string; isInput:boolean; distance:number } | null = null
+    for (const node of visibleNodes) {
+      if (node.id === pendingWire.fromNodeId) continue
+      if (node.type === 'result' && !needInput) continue
+      const x = needInput ? node.x : node.x+node.w
+      const distance = Math.abs(mx-x)
+      if (distance >= EDGE_SNAP_THRESHOLD || (best && distance >= best.distance)) continue
+      if (my < node.y+8 || my > node.y+node.h-8) continue
+      const yRel = Math.max(42,Math.min(node.h-12,my-node.y))
+      best = { nodeId:node.id, yRel, x, y:node.y+yRel, color:WIRE_CLR, isInput:needInput, distance }
+    }
+    return best
+  })()
+
   return (
     <div
       ref={outerRef}
+      className="museflow-canvas"
       style={{
         flex:1, overflow:'hidden', position:'relative',
         cursor: pendingWire ? 'crosshair' : 'default',
         background: '#111110',
-        backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px)',
+        backgroundImage: `radial-gradient(circle, rgba(255,255,255,${(0.03 + Math.min(zoom,1.4)*0.035).toFixed(3)} ${Math.max(0.4, zoom).toFixed(2)}px, transparent ${Math.max(0.4, zoom).toFixed(2)}px))`,
         backgroundSize: `${dotPx}px ${dotPx}px`,
         backgroundPosition: `${bgX}px ${bgY}px`,
       }}
@@ -212,78 +595,212 @@ export default function Canvas({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onClick={handleCanvasClick}
+      onDragEnter={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();setFileDropActive(true)}}}
+      onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();e.dataTransfer.dropEffect='copy';setFileDropActive(true)}}}
+      onDragLeave={e=>{if(e.currentTarget===e.target)setFileDropActive(false)}}
+      onDrop={e=>{
+        if (!e.dataTransfer.files.length) return
+        e.preventDefault();e.stopPropagation();setFileDropActive(false)
+        const point=toCanvas(e.clientX,e.clientY)
+        void onImportFiles(Array.from(e.dataTransfer.files),point.x,point.y)
+      }}
     >
       <div
         ref={innerRef}
+        className="museflow-canvas-scene"
         style={{
           position:'absolute', width:20000, height:16000,
           transformOrigin:'0 0',
           transform:`translate(${panX}px,${panY}px) scale(${zoom})`,
+          transition:guideCamera?'transform 620ms cubic-bezier(.22,1,.36,1)':'none',
         }}
       >
-        {/* SVG wires */}
-        <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none', overflow:'visible' }}>
-          <defs>
-            {['#3BBDAF','#F5A523','#6B6EF5','#9B7EFF','#F06090','#7A7A78'].map(c => (
-              <filter key={c} id={`glow-${c.replace('#','')}`} x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="blur"/>
-                <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-              </filter>
-            ))}
-          </defs>
+        <WireLayer
+          nodes={nodes}
+          wires={wires}
+          hoveredWire={hoveredWire}
+          onHoverWire={setHoveredWire}
+          onDeleteWire={(wireId: string) => {
+            setHoveredWire(null)
+            onRemoveWire(wireId)
+          }}
+          wireLabel={wireLabel}
+          whyChangedTip={langS.whyChangedTip}
+          pendingWire={pendingWire}
+          snapTarget={snapTarget}
+          edgeSnap={edgeSnap}
+        />
+        {ghost && (() => {
+          const node = nodes.find(item => item.id === ghost.nodeId)
+          if (!node?.visible) return null
+          const x = ghost.isInput ? node.x : node.x + node.w
+          const y = node.y + ghost.yRel
+          return (
+            <button type="button" aria-label="拖动连接" onPointerDown={handleGhostPointerDown}
+              style={{ position:'absolute', left:x-8, top:y-22, width:16, height:44, padding:0,
+                border:0, outline:'none', background:'transparent', overflow:'visible',
+                cursor:'crosshair', zIndex:24, color:ghost.color, pointerEvents:'auto' }}>
+              <span aria-hidden="true" style={{ position:'absolute', top:0, bottom:0,
+                ...(ghost.isInput ? { right:8, width:20 } : { left:8, width:20 }), overflow:'hidden', pointerEvents:'none' }}>
+                <span style={{ position:'absolute', top:7, bottom:7, width:2,
+                  ...(ghost.isInput ? { right:0 } : { left:0 }), borderRadius:2,
+                  background:`linear-gradient(to bottom, transparent, ${ghost.color} 28%, ${ghost.color} 72%, transparent)`,
+                  boxShadow:`0 0 8px ${ghost.color}, 0 0 18px ${ghost.color}99` }}/>
+              </span>
+            </button>
+          )
+        })()}
+        {/* 融合板内的光晕统一绘制在卡片下方，并精确裁切在左侧素材区。 */}
+        {visibleNodes.filter(frame => frame.type === 'frame').map(frame => {
+          const hasLyrics = wires.some(w => (w.toNodeId === frame.id || w.fromNodeId === frame.id) && nodes.some(n => n.id === (w.toNodeId === frame.id ? w.fromNodeId : w.toNodeId) && n.type === 'lyrics' && n.visible))
+          const canvasLeft = frame.x + 1
+          const canvasTop = frame.y + 1 + FRAME_HEADER_H + (hasLyrics ? FRAME_LYRICS_BAR_H : 0)
+          const materials = visibleNodes.filter(material =>
+            ['image','audio','text'].includes(material.type) &&
+            material.x + material.w/2 > canvasLeft && material.x + material.w/2 < canvasLeft + FRAME_CANVAS_W &&
+            material.y + material.h/2 > canvasTop && material.y + material.h/2 < frame.y + frame.h)
+          if (!materials.length) return null
+          return (
+            <div key={`frame-glows-${frame.id}`} data-frame-glow-layer={frame.id} aria-hidden="true" style={{
+              position:'absolute', left:canvasLeft, top:canvasTop, width:FRAME_CANVAS_W,
+              height:Math.max(0,frame.y+frame.h-1-canvasTop), overflow:'hidden',
+              borderRadius:'0 0 0 13px', pointerEvents:'none', zIndex:1,
+            }}>
+              {materials.map(material => {
+                const rgb = hexToRgb(nodeThemeColor(material))
+                const weight = Number(material.data.weight ?? 35)
+                const dispX = Math.min(material.x,frame.x+FRAME_CANVAS_W-material.w-6)
+                return <span key={material.id} style={{
+                  position:'absolute', left:dispX-canvasLeft, top:material.y-canvasTop,
+                  width:material.w, height:material.h, borderRadius:10,
+                  boxShadow:`0 0 ${12+weight*0.35}px rgba(${rgb},${0.10+weight*0.0028}),0 0 ${36+weight*1.2}px rgba(${rgb},${0.05+weight*0.0014})${material.selected ? `,0 0 34px rgba(${rgb},0.32)` : ''}`,
+                }}/>
+              })}
+            </div>
+          )
+        })}
 
-          {wires.map(wire => {
-            const fn = nodes.find(n => n.id === wire.fromNodeId)
-            const tn = nodes.find(n => n.id === wire.toNodeId)
-            if (!fn?.visible || !tn?.visible) return null
-            const fp = fn.outputs.find(p => p.id === wire.fromPortId)
-            const tp = tn.inputs.find(p => p.id === wire.toPortId)
-            if (!fp || !tp) return null
-            const sx = fn.x+fn.w, sy = fn.y+fp.yRel
-            const ex = tn.x,      ey = tn.y+tp.yRel
-            const cx = (sx+ex)/2
-            return (
-              <g key={wire.id}>
-                <path d={`M${sx},${sy} C${cx},${sy} ${cx},${ey} ${ex},${ey}`}
-                  fill="none" stroke={WIRE_CLR} strokeWidth={4} opacity={0.1}/>
-                <path d={`M${sx},${sy} C${cx},${sy} ${cx},${ey} ${ex},${ey}`}
-                  fill="none" stroke={WIRE_CLR} strokeWidth={1.5} opacity={0.55}
-                  style={{ pointerEvents:'stroke', cursor:'pointer' }}
-                  onClick={e=>{ e.stopPropagation(); onRemoveWire(wire.id) }}/>
-                <circle cx={sx} cy={sy} r={PORT_R} fill={WIRE_CLR} opacity={0.75}/>
-                <circle cx={ex} cy={ey} r={PORT_R} fill={WIRE_CLR} opacity={0.75}/>
-              </g>
-            )
-          })}
-
-          {pendingWire && (() => {
-            const sx = pendingWire.isOutput ? pendingWire.startX : pendingWire.mouseX
-            const sy = pendingWire.isOutput ? pendingWire.startY : pendingWire.mouseY
-            const ex = pendingWire.isOutput ? pendingWire.mouseX : pendingWire.startX
-            const ey = pendingWire.isOutput ? pendingWire.mouseY : pendingWire.startY
-            const cx = (sx+ex)/2
-            return (
-              <>
-                <path d={`M${sx},${sy} C${cx},${sy} ${cx},${ey} ${ex},${ey}`}
-                  fill="none" stroke={pendingWire.color} strokeWidth={2} strokeDasharray="6,4" opacity={0.65}/>
-                <circle cx={sx} cy={sy} r={PORT_R} fill={pendingWire.color}/>
-              </>
-            )
-          })()}
-        </svg>
-
-        {visibleNodes.map(node => (
+        {visibleNodes.map(node => {
+          const inbound: InboundRef[] = wires
+            .filter(w => w.toNodeId === node.id)
+            .map(w => {
+              const src = nodes.find(n => n.id === w.fromNodeId)
+              return { name: String(src?.data?.name ?? src?.data?.label ?? ''), label: String(src?.data?.label ?? ''), color: String(src?.data?.color ?? '#8A8A86') }
+            })
+          return (
           <NodeCard
             key={node.id}
             node={node}
-            isGenerating={isGenerating && node.type === 'explore' && node.state === 'running'}
+            nodes={nodes}
+            wires={wires}
+            onSelect={onSelectNode}
+            onExtractSource={(folderId, source, clientX, clientY) => {
+              const pt = toCanvas(clientX, clientY)
+              onExtractSource(folderId, source, pt.x, pt.y)
+            }}
+            onRemoveSource={onRemoveSource}
+            langS={langS}
+            onUpdateNodeData={onUpdateNodeData}
+            onDivergeFrame={onDivergeFrame}
+            onExtractDemo={(frameId, demo, clientX, clientY) => {
+              const point = toCanvas(clientX, clientY)
+              onExtractDemo(frameId, demo, point.x, point.y)
+            }}
+            onGenerateAudioFolder={onGenerateAudioFolder}
+            onExtractWork={(folderId, work, clientX, clientY) => {
+              const point = toCanvas(clientX, clientY)
+              onExtractWork(folderId, work, point.x, point.y)
+            }}
+            groupTargeted={groupTargetId === node.id}
+            onOpenDemoDetail={onOpenDemoDetail}
+            inbound={inbound}
+            compareIds={compareIds}
+            actions={{ onCommit, onCompareToggle }}
             onPointerDownHeader={e => startNodeDrag(e, node)}
             onPortPointerDown={(e, port, isOut) => startPortDrag(e, node, port, isOut)}
-            onGenerate={() => onGenerate(node.id)}
             onExport={onExport}
+            pendingWire={pendingWire}
+            onUpdateNodeSize={onUpdateNodeSize}
+            onCardContextMenu={openCardMenu}
           />
-        ))}
+          )
+        })}
       </div>
+
+      {fileDropActive && (
+        <div style={{position:'absolute',inset:12,zIndex:110,pointerEvents:'none',border:'1px dashed #6B6EF5',borderRadius:14,
+          background:'rgba(18,18,28,.72)',boxShadow:'inset 0 0 60px rgba(107,110,245,.08)',display:'grid',placeItems:'center',
+          backdropFilter:'blur(3px)'}}>
+          <div style={{padding:'14px 18px',borderRadius:10,background:'#1A1A24',border:'1px solid #6B6EF548',
+            color:'#B8BAFF',fontSize:12,fontWeight:700,boxShadow:'0 14px 36px rgba(0,0,0,.45)'}}>＋ {langS.langToggle==='EN'?'将图片或音频放到这里':'Drop image or audio here'}</div>
+        </div>
+      )}
+
+      {/* 框选矩形 */}
+      {marquee && (() => {
+        const x = Math.min(marquee.x1, marquee.x2) * zoom + panX
+        const y = Math.min(marquee.y1, marquee.y2) * zoom + panY
+        const w = Math.abs(marquee.x2 - marquee.x1) * zoom
+        const h = Math.abs(marquee.y2 - marquee.y1) * zoom
+        return (
+          <div style={{ position:'absolute', left:x, top:y, width:w, height:h,
+            border:'1px solid #6B6EF590', background:'#6B6EF510',
+            borderRadius:4, pointerEvents:'none', zIndex:30 }}/>
+        )
+      })()}
+
+      {/* 框选批量删除悬浮栏 */}
+      {(() => {
+        const selectedCount = visibleNodes.filter(n => n.selected).length
+        if (selectedCount < 2 || !onDeleteSelected) return null
+        return (
+          <div
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+            style={{
+              position:'absolute', bottom:20, left:'50%', transform:'translateX(-50%)',
+              zIndex:40, display:'flex', alignItems:'center', gap:10,
+              padding:'8px 8px 8px 14px', borderRadius:24,
+              background:'#1A1A19', border:'1px solid #2C2C2A',
+              boxShadow:'0 12px 32px rgba(0,0,0,0.55)', userSelect:'none',
+              fontFamily:"'Inter',sans-serif",
+            }}>
+            <span style={{ display:'flex', alignItems:'center', gap:7, color:'#C0C0BC', fontSize:12, fontWeight:600, whiteSpace:'nowrap' }}>
+              <span style={{ width:7, height:7, borderRadius:'50%', background:'#6B6EF5', boxShadow:'0 0 6px #6B6EF5' }}/>
+              {langS.selectedCount} {selectedCount} {langS.cardsUnit}
+            </span>
+            <span style={{ width:1, height:18, background:'#2C2C2A' }}/>
+            <button
+              onClick={e => { e.stopPropagation(); onDeleteSelected?.() }}
+              style={{
+                display:'flex', alignItems:'center', gap:6,
+                padding:'7px 14px', borderRadius:16, border:'none',
+                background:'#E53E3E', color:'#fff', fontSize:12, fontWeight:700, cursor:'pointer',
+                boxShadow:'0 2px 8px rgba(229,62,62,0.35)', fontFamily:"'Inter',sans-serif", whiteSpace:'nowrap',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background='#D32F2F' }}
+              onMouseLeave={e => { e.currentTarget.style.background='#E53E3E' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+              </svg>
+              {langS.batchDelete} ({selectedCount})
+            </button>
+            <button
+              onClick={e => { e.stopPropagation(); onSelectMany(null) }}
+              style={{
+                padding:'7px 12px', borderRadius:16, border:'1px solid #2C2C2A',
+                background:'transparent', color:'#8A8A86', fontSize:12, fontWeight:600, cursor:'pointer',
+                fontFamily:"'Inter',sans-serif", whiteSpace:'nowrap',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.color='#C0C0BC'; e.currentTarget.style.borderColor='#3A3A38' }}
+              onMouseLeave={e => { e.currentTarget.style.color='#8A8A86'; e.currentTarget.style.borderColor='#2C2C2A' }}
+            >
+              {langS.clearSelection}
+            </button>
+          </div>
+        )
+      })()}
 
       {/* Zoom HUD — bottom-left to avoid help button */}
       <div style={{
@@ -294,14 +811,43 @@ export default function Canvas({
         boxShadow:'0 4px 16px rgba(0,0,0,0.4)',
         userSelect:'none', zIndex:20,
       }}>
-        <ZBtn onClick={() => applyZoom(zoom/1.2, (outerRef.current?.clientWidth??800)/2, (outerRef.current?.clientHeight??600)/2)}>−</ZBtn>
-        <ZoomInput zoom={zoom} applyZoom={applyZoom} outerRef={outerRef}/>
-        <ZBtn onClick={() => applyZoom(zoom*1.2, (outerRef.current?.clientWidth??800)/2, (outerRef.current?.clientHeight??600)/2)}>+</ZBtn>
+        <ZBtn onClick={() => {
+          const r = outerRef.current!.getBoundingClientRect()
+          const m = mousePosRef.current
+          applyZoom(zoom/1.2, m ? m.x - r.left : r.width/2, m ? m.y - r.top : r.height/2)
+        }}>−</ZBtn>
+        <ZoomInput zoom={zoom} applyZoom={(z) => {
+          const r = outerRef.current!.getBoundingClientRect()
+          const m = mousePosRef.current
+          applyZoom(z, m ? m.x - r.left : r.width/2, m ? m.y - r.top : r.height/2)
+        }} outerRef={outerRef}/>
+        <ZBtn onClick={() => {
+          const r = outerRef.current!.getBoundingClientRect()
+          const m = mousePosRef.current
+          applyZoom(zoom*1.2, m ? m.x - r.left : r.width/2, m ? m.y - r.top : r.height/2)
+        }}>+</ZBtn>
       </div>
+
+      {/* Empty state — Start with anything */}
+      {visibleNodes.length === 0 && (
+        <EmptyState onAddNode={onAddNode} onAddFrame={onAddFrame}/>
+      )}
+
+      {cardMenu && (() => {
+        return <CardContextMenu node={cardMenu.node} x={cardMenu.x} y={cardMenu.y}
+          onClose={()=>setCardMenu(null)} onExported={showExportToast}
+          labels={{ downloadAudio:langS.cardDownloadAudio, exportLyrics:langS.cardExportLyrics }}/>
+      })()}
+
+      {exportToast && (
+        <div role="status" style={{ position:'absolute', left:'50%', bottom:62, transform:'translateX(-50%)', zIndex:130,
+          padding:'8px 12px', borderRadius:8, background:'rgba(24,24,23,.94)', border:'1px solid #363633',
+          color:'#BFC0BA', fontSize:10.5, fontWeight:600, boxShadow:'0 10px 34px rgba(0,0,0,.5)',
+          pointerEvents:'none', whiteSpace:'nowrap' }}>{exportToast}</div>
+      )}
     </div>
   )
 }
-
 function ZoomInput({ zoom, applyZoom, outerRef }: {
   zoom: number
   applyZoom: (newZ: number, fx: number, fy: number) => void
@@ -370,142 +916,327 @@ function ZBtn({ children, onClick }: { children: React.ReactNode; onClick: () =>
   )
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// NodeCard
-// ────────────────────────────────────────────────────────────────────────────
+
+// ── NodeCard ──
 
 interface NodeCardProps {
   node: CanvasNode
-  isGenerating: boolean
+  nodes: CanvasNode[]
+  wires: Wire[]
+  onSelect: (id: string) => void
+  langS: ReturnType<typeof useLang>
+  onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
+  onDivergeFrame: (frameId: string) => void
+  onExtractDemo: (frameId: string, demo: DemoItem, clientX: number, clientY: number) => void
+  onGenerateAudioFolder: (folderId: string) => void
+  onExtractWork: (folderId: string, work: WorkItem, clientX: number, clientY: number) => void
+  groupTargeted: boolean
+  onOpenDemoDetail: (id: string) => void
+  inbound: InboundRef[]
+  compareIds: string[]
+  actions: IdeationActions
   onPointerDownHeader: (e: React.PointerEvent) => void
   onPortPointerDown: (e: React.PointerEvent, port: Port, isOutput: boolean) => void
-  onGenerate: () => void
   onExport: () => void
+  pendingWire: PendingWire | null
+  onUpdateNodeSize?: (id: string, w: number, h: number) => void
+  onCardContextMenu: (e:React.MouseEvent, node:CanvasNode) => void
+  onExtractSource: (folderId: string, source: import('./canvas/model').WorkSource, x: number, y: number) => void
+  onRemoveSource: (folderId: string, sourceId: string) => void
 }
 
-function NodeCard({ node, isGenerating, onPointerDownHeader, onPortPointerDown, onGenerate, onExport }: NodeCardProps) {
+function NodeCard({ node, nodes, wires, onSelect, langS, onUpdateNodeData, onDivergeFrame, onExtractDemo, onGenerateAudioFolder, onExtractWork, groupTargeted, onOpenDemoDetail, inbound, compareIds, actions, onPointerDownHeader, onPortPointerDown, onExport, pendingWire, onUpdateNodeSize, onCardContextMenu, onExtractSource, onRemoveSource }: NodeCardProps) {
   const isResult = node.type === 'result'
+  const isPortableCard = node.type === 'work' || (node.type === 'direction' && (
+    !!node.data.demo || (node.w === DEMO_CARD_W && node.h === DEMO_CARD_H)
+  ))
+  const [hovered, setHovered] = useState(false)
+  const [showPorts, setShowPorts] = useState(false)
+  const [lyricsPreviewOpen, setLyricsPreviewOpen] = useState(false)
+  const timerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (hovered) {
+      timerRef.current = window.setTimeout(() => setShowPorts(true), 320)
+    } else {
+      if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null }
+      setShowPorts(false)
+    }
+    return () => { if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null } }
+  }, [hovered])
+
+  const shouldForceShow = (port: Port, isInput: boolean) => {
+    if (pendingWire) {
+      if (pendingWire.fromNodeId === node.id) return false
+      const needInput = pendingWire.isOutput
+      return isInput === needInput
+    }
+    return false
+  }
+
+  const isMaterial = ['image','audio','text'].includes(node.type)
+  const weight = isMaterial ? Number(node.data.weight ?? 35) : 0
+  const frame = isMaterial
+    ? nodes.find(f => f.type === 'frame' &&
+        node.x + node.w/2 > f.x && node.x + node.w/2 < f.x + FRAME_CANVAS_W &&
+        node.y + node.h/2 > f.y && node.y + node.h/2 < f.y + f.h)
+    : undefined
+  const inFrame = !!frame
+  const hidePersistentPortDots = node.type === 'frame' || node.type === 'audioFolder'
+  let dispX = node.x
+  if (frame) dispX = Math.min(node.x, frame.x + FRAME_CANVAS_W - node.w - 6)
+  const gravity = !!node.data.kept
+
+  const themeRgb = hexToRgb(nodeThemeColor(node))
+
   return (
     <div
-      className="node-appear"
-      style={{ position:'absolute', left:node.x, top:node.y, width:node.w, height:node.h, zIndex:node.selected?10:1 }}
+      className={isPortableCard ? undefined : 'node-appear'}
+      data-node="1"
+      data-node-id={node.id}
+      onContextMenu={e=>onCardContextMenu(e,node)}
+      style={{ position:'absolute', left:dispX, top:node.y, width:node.w, height:node.h,
+        zIndex: node.type==='field' || node.type==='frame' ? 0
+          : hovered && node.data.usedPrompt ? 60
+          : node.selected ? 10 : gravity ? 8 : inFrame ? 1 + Math.round(weight/25) : 1,
+        filter: gravity ? 'drop-shadow(0 0 18px rgba(94,201,110,0.18))' : undefined,
+        transition:isPortableCard ? 'filter 0.25s' : 'filter 0.25s, transform 0.2s cubic-bezier(0.22,1,0.36,1)',
+        transform:groupTargeted ? 'scale(1.045)' : 'scale(1)' }}
+      onPointerDownCapture={(e) => {
+        const target = e.target as HTMLElement
+        if (target.closest('[data-port]') || target.closest('[data-lyrics-resize-handle]')) return
+        onSelect(node.id)
+      }}
+      onClick={(e) => {
+        e.stopPropagation()
+        onSelect(node.id)
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onMouseMove={() => {
+        if (hovered && !showPorts) {
+          if (timerRef.current !== null) clearTimeout(timerRef.current)
+          timerRef.current = window.setTimeout(() => setShowPorts(true), 320)
+        }
+      }}
     >
-      {node.inputs.map(port => (
-        <PortCircle key={port.id} port={port} isInput={true}
-          onPointerDown={e => onPortPointerDown(e, port, false)}/>
-      ))}
-      {node.outputs.map(port => (
-        <PortCircle key={port.id} port={port} isInput={false}
-          onPointerDown={e => onPortPointerDown(e, port, true)}/>
-      ))}
+      {!hidePersistentPortDots && node.inputs.filter(port => !isAutoEdgePort(port)).map(port => {
+        const forceVisible = shouldForceShow(port, true)
+        const visible = showPorts || forceVisible
+        return (
+          <PortCircle key={port.id} port={port} isInput={true}
+            visible={visible} isSnapTarget={false}
+            onPointerDown={e => onPortPointerDown(e, port, false)}/>
+        )
+      })}
+      {!hidePersistentPortDots && node.outputs.filter(port => !isAutoEdgePort(port)).map(port => {
+        const forceVisible = shouldForceShow(port, false)
+        const visible = showPorts || forceVisible
+        return (
+          <PortCircle key={port.id} port={port} isInput={false}
+            visible={visible} isSnapTarget={false}
+            onPointerDown={e => onPortPointerDown(e, port, true)}/>
+        )
+      })}
 
+      {isMaterial && inFrame && (
+        <span style={{ position:'absolute', top:5, right:7, zIndex:26, pointerEvents:'none',
+          fontSize:8.5, fontWeight:800, color:'#8A8AFF',
+          background:'rgba(18,18,28,0.88)', border:'1px solid #6B6EF545',
+          borderRadius:4, padding:'1px 5px', fontFamily:"'JetBrains Mono',monospace" }}>
+          {weight}%
+        </span>
+      )}
       <div
         onPointerDown={onPointerDownHeader}
+        onClickCapture={e => {
+          if ((node.type === 'direction' && node.data.demo) || node.type === 'work') {
+            e.stopPropagation()
+            onOpenDemoDetail(node.id)
+          }
+        }}
+        className={node.selected && !inFrame ? 'sel-breathe' : undefined}
         style={{
+          position:'relative', zIndex:2,
           width:'100%', height:'100%',
           borderRadius: isResult ? 14 : 10,
-          background: isResult ? 'transparent' : '#1A1A19',
-          border: node.selected
-            ? `1.5px solid ${isResult ? '#3BBDAF60' : '#6B6EF5'}`
-            : `1px solid ${isResult ? '#1E3235' : '#2C2C2A'}`,
-          overflow:'clip', cursor:'grab',
-          boxShadow: node.selected
-            ? `0 0 0 3px ${isResult ? '#3BBDAF15' : '#6B6EF520'}, 0 8px 32px rgba(0,0,0,0.5)`
-            : isResult
-              ? '0 12px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(59,189,175,0.08)'
-              : '0 4px 16px rgba(0,0,0,0.4)',
+          background: isResult || isPortableCard ? 'transparent' : '#1A1A19',
+          border: isPortableCard ? 'none' : node.selected
+            ? `1px solid rgba(${themeRgb},0.42)`
+            : (isMaterial && inFrame)
+              ? `1px solid rgba(${themeRgb},0.34)`
+              : `1px solid ${isResult ? '#1E3235' : '#2C2C2A'}`,
+          overflow:'visible', cursor:'grab',
+          ['--sc' as string]: themeRgb,
+          boxShadow: isPortableCard
+            ? (node.selected ? `0 0 0 1px rgba(${themeRgb},0.42), 0 0 22px rgba(${themeRgb},0.12)` : undefined)
+            : inFrame
+            ? '0 4px 16px rgba(0,0,0,0.4)'
+            : node.selected
+            ? undefined
+            : `0 4px 16px rgba(0,0,0,0.4)`, 
           display:'flex', flexDirection:'column', userSelect:'none',
         }}
       >
-        <NodeContent node={node} isGenerating={isGenerating} onGenerate={onGenerate} onExport={onExport}/>
+        <div style={{ flex:1, minHeight:0, width:'100%', height:'100%', borderRadius: isResult ? 14 : 10, overflow:'clip', display:'flex', flexDirection:'column' }}>
+          <NodeContent node={node} inbound={inbound} compareIds={compareIds} actions={actions} onExport={onExport} nodes={nodes} wires={wires} langS={langS} onUpdateNodeData={onUpdateNodeData} onDivergeFrame={onDivergeFrame} onGenerateAudioFolder={onGenerateAudioFolder} onOpenDemoDetail={onOpenDemoDetail} onExtractSource={onExtractSource} onRemoveSource={onRemoveSource} lyricsPreviewOpen={lyricsPreviewOpen} onToggleLyricsPreview={() => setLyricsPreviewOpen(v => !v)}/>
+        </div>
+        {node.type === 'lyrics' && lyricsPreviewOpen && (
+          <LyricsPreviewPanel node={node} onClose={() => setLyricsPreviewOpen(false)} />
+        )}
+      </div>
+
+      {node.type === 'lyrics' && onUpdateNodeSize && (
+        <LyricsResizeHandle node={node} onUpdateNodeSize={onUpdateNodeSize}/>
+      )}
+
+      {groupTargeted && (
+        <div style={{ position:'absolute', inset:-5, zIndex:40, pointerEvents:'none', borderRadius:14,
+          border:'1px solid #A69AFF', boxShadow:'0 0 0 4px #8A7CFF18, 0 0 36px #8A7CFF55',
+          display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ width:38, height:32, borderRadius:9, background:'rgba(22,20,36,.94)', border:'1px solid #A69AFF88',
+            boxShadow:'0 10px 26px rgba(0,0,0,.45)', display:'grid', gridTemplateColumns:'repeat(2,6px)',
+            gridAutoRows:'6px', gap:4, placeContent:'center' }}>
+            {[0,1,2,3].map(i=><span key={i} style={{ borderRadius:2, background:i===3?'#5CE1E6':'#A69AFF' }}/>) }
+          </div>
+        </div>
+      )}
+
+      {node.type === 'frame' && (!!node.data.generating || ((node.data.demos as DemoItem[] | undefined)?.length ?? 0) > 0) && (
+        <FrameDemoDrawer node={node} onUpdateNodeData={onUpdateNodeData} onExtractDemo={onExtractDemo}
+          onDemoContextMenu={(e,demo)=>onCardContextMenu(e,{
+            id:demo.id,type:'direction',x:0,y:0,w:DEMO_CARD_W,h:DEMO_CARD_H,visible:true,selected:false,
+            inputs:[],outputs:[],data:{...demo,demo:true},
+          })}/>
+      )}
+
+      {node.type === 'audioFolder' && (!!node.data.generating || ((node.data.works as WorkItem[] | undefined)?.length ?? 0) > 0) && (
+        <WorkDrawer node={node} onUpdateNodeData={onUpdateNodeData} onExtractWork={onExtractWork}
+          onWorkContextMenu={(e,work)=>onCardContextMenu(e,{
+            id:work.id,type:'work',x:0,y:0,w:WORK_CARD_W,h:WORK_CARD_H,visible:true,selected:false,
+            inputs:[],outputs:[],data:{...work},
+          })}/>
+      )}
+
+    </div>
+  )
+}
+
+function LyricsPreviewPanel({ node, onClose }: { node: CanvasNode; onClose: () => void }) {
+  const sections = (node.data.sections as Array<{id:string, type:string, label:string, content:string}> | undefined) ?? []
+  const colors: Record<string, string> = {
+    intro: '#8A8AFF', verse: '#3BBDAF', preChorus: '#9B7EFF', chorus: '#E56B8A', bridge: '#F5A523', outro: '#7A7A78', custom: '#E56B8A',
+  }
+  const populatedSections = sections.filter(section => String(section.content ?? '').trim())
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return (
+    <div
+      role="region"
+      aria-label="歌词浏览"
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}
+      onWheel={event => event.stopPropagation()}
+      style={{
+        position:'absolute', left:node.w + 9, top:-1, width:276, height:'calc(100% + 2px)', boxSizing:'border-box', zIndex:8,
+        overflow:'hidden', borderRadius:10, border:'1px solid rgba(229,107,138,0.16)',
+        background:'linear-gradient(155deg, rgba(34,29,39,0.62), rgba(13,13,18,0.54))',
+        backdropFilter:'blur(18px) saturate(135%)', WebkitBackdropFilter:'blur(18px) saturate(135%)',
+        boxShadow:'0 16px 42px rgba(0,0,0,0.42), inset 0 1px rgba(255,255,255,0.035), 0 0 26px rgba(229,107,138,0.04)',
+        color:'#F2F2F5', fontFamily:"'Inter',sans-serif", cursor:'default',
+      }}
+    >
+      <div className="thin-scroll explore-scroll" style={{ position:'absolute', inset:0, overflowY:'auto', overscrollBehavior:'contain', scrollBehavior:'smooth', padding:'32px 24px 54px' }}>
+        {populatedSections.length === 0 ? (
+          <div style={{ height:'100%', display:'grid', placeItems:'center', textAlign:'center' }}>
+            <div>
+              <div style={{ color:'#4F4F59', fontSize:24, marginBottom:10 }}>♪</div>
+              <div style={{ color:'#6C6C75', fontSize:11, fontWeight:650 }}>还没有可浏览的歌词</div>
+            </div>
+          </div>
+        ) : populatedSections.map((section, sectionIndex) => {
+          const color = colors[section.type] ?? '#E56B8A'
+          const lines = String(section.content).split(/\r?\n/)
+          return (
+            <section key={section.id} style={{ marginBottom:sectionIndex === populatedSections.length - 1 ? 0 : 34, scrollSnapAlign:'start' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:11, color, fontSize:8, fontWeight:800, letterSpacing:'0.08em' }}>
+                <span style={{ width:4, height:4, borderRadius:'50%', background:color, boxShadow:`0 0 8px ${color}88` }}/>
+                <span>{section.label}</span>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+                {lines.map((line, lineIndex) => (
+                  line.trim() ? (
+                    <div key={lineIndex} style={{ fontSize:14, lineHeight:1.55, fontWeight:630, letterSpacing:'-0.012em', color:section.type === 'chorus' ? '#EEE8EF' : '#BBB9C1', textShadow:section.type === 'chorus' ? `0 0 18px ${color}18` : 'none', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{line}</div>
+                  ) : <div key={lineIndex} style={{ height:7 }} />
+                ))}
+              </div>
+            </section>
+          )
+        })}
+      </div>
+      <div aria-hidden="true" style={{ position:'absolute', inset:'0 0 auto', height:28, pointerEvents:'none', background:'linear-gradient(to bottom, rgba(25,21,29,0.9), rgba(25,21,29,0))' }}/>
+      <div aria-hidden="true" style={{ position:'absolute', inset:'auto 0 0', height:48, pointerEvents:'none', background:'linear-gradient(to top, rgba(13,13,18,0.9) 14%, rgba(13,13,18,0))' }}/>
+    </div>
+  )
+}
+
+// ── Empty state ──
+
+function EmptyState({ onAddNode }: { onAddNode: (type: string) => void; onAddFrame?: () => void }) {
+  const s = useLang()
+  const items = [
+    { t: 'image', label: s.qAddImage, icon: '🖼' },
+    { t: 'audio-hum', label: s.qRecordMelody, icon: '🎤' },
+    { t: 'text', label: s.qWriteThought, icon: 'T' },
+    { t: 'audio-ref', label: s.qAddReference, icon: '🔗' },
+  ]
+  return (
+    <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', zIndex:15, pointerEvents:'none' }}>
+      <div style={{ textAlign:'center' }}>
+        <div style={{ fontSize:22, fontWeight:800, color:'#E8E8E4', letterSpacing:'-0.03em', fontStyle:'italic' }}>{s.startWhatever}</div>
+        <div style={{ fontSize:12, color:'#5A5A56', marginTop:8, maxWidth:420, lineHeight:1.6 }}>{s.startSub2}</div>
+        <div style={{ display:'flex', gap:8, justifyContent:'center', marginTop:18, flexWrap:'wrap' }}>
+          {items.map(it => (
+            <button key={it.t} onClick={() => onAddNode(it.t)}
+              style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 14px',
+                background:'#1A1A19', border:'1px solid #2C2C2A', borderRadius:10,
+                color:'#C0C0BC', fontSize:11.5, fontWeight:600, cursor:'pointer',
+                fontFamily:"'Inter',sans-serif", pointerEvents:'auto' }}>
+              <span style={{ fontSize:13 }}>{it.icon}</span>{it.label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
 }
-
-function PortCircle({ port, isInput, onPointerDown }: {
-  port: Port; isInput: boolean; onPointerDown: (e: React.PointerEvent) => void
-}) {
-  const [hov, setHov] = useState(false)
-  return (
-    <div
-      onPointerDown={onPointerDown}
-      onPointerEnter={() => setHov(true)}
-      onPointerLeave={() => setHov(false)}
-      title={port.label}
-      style={{
-        position:'absolute',
-        left: isInput ? -PORT_R : undefined,
-        right: isInput ? undefined : -PORT_R,
-        top: port.yRel - PORT_R,
-        width:PORT_R*2, height:PORT_R*2, borderRadius:'50%',
-        background: hov ? WIRE_CLR : '#1A1A19',
-        border:`2px solid ${WIRE_CLR}`,
-        cursor:'crosshair', zIndex:20,
-        transition:'background 0.1s, box-shadow 0.1s',
-        boxShadow: hov ? `0 0 8px ${WIRE_CLR}80` : 'none',
-      }}
-    />
-  )
-}
-
-// ── Node content router ───────────────────────────────────────────────────────
-
-function NodeContent({ node, isGenerating, onGenerate, onExport }: {
-  node: CanvasNode; isGenerating: boolean; onGenerate: () => void; onExport: () => void
-}) {
-  switch (node.type) {
-    case 'image':     return <ImageContent node={node}/>
-    case 'audio':     return <AudioContent node={node}/>
-    case 'text':      return <TextContent node={node}/>
-    case 'mood':      return <MoodContent node={node}/>
-    case 'explore':   return <ExploreContent node={node} isGenerating={isGenerating} onGenerate={onGenerate}/>
-    case 'direction': return <DirectionContent node={node}/>
-    case 'fuse':      return <FuseContent node={node}/>
-    case 'brief':     return <BriefContent node={node} onExport={onExport}/>
-    case 'result':    return <ResultContent node={node} onExport={onExport}/>
-    default:          return null
-  }
-}
-
-function NodeHdr({ label, icon, accent }: { label: string; icon?: React.ReactNode; accent?: string }) {
-  return (
-    <div style={{
-      height:34, background:'#141413', borderBottom:'1px solid #2C2C2A',
-      display:'flex', alignItems:'center', padding:'0 10px', gap:7, flexShrink:0,
-    }}>
-      {icon && (
-        <div style={{
-          width:18, height:18, borderRadius:4, flexShrink:0,
-          background: accent ? accent+'20' : '#1E1E1C',
-          border:`1px solid ${accent ? accent+'40' : '#2C2C2A'}`,
-          display:'flex', alignItems:'center', justifyContent:'center', fontSize:10,
-        }}>{icon}</div>
-      )}
-      <span style={{ fontSize:11, fontWeight:600, color:'#7A7A76', letterSpacing:'-0.01em' }}>{label}</span>
-    </div>
-  )
-}
-
 // ── Image ─────────────────────────────────────────────────────────────────────
 
-function ImageContent({ node }: { node: CanvasNode }) {
-  const s = useLang()
+function ImageContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void }) {
+  const kws = (node.data.keywords as string[] | undefined) ?? []
   return (
     <>
-      <NodeHdr label={node.data.label as string} icon="🖼" accent="#3BBDAF"/>
-      <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
+      <NodeHdr label={String(node.data.label ?? '图片')} icon="🖼" accent="#3BBDAF"
+        editable onRename={v => onUpdateNodeData(node.id, { label: v })}/>
+      <div style={{ flex:1, minHeight:0, position:'relative', overflow:'hidden' }}>
         <img src={node.data.imageUrl as string} alt="" draggable={false}
-          style={{ width:'100%', height:'100%', objectFit:'cover', display:'block', opacity:0.82 }}/>
-        <div style={{ position:'absolute', bottom:0, left:0, right:0, padding:'20px 8px 6px',
-          background:'linear-gradient(to top,rgba(0,0,0,0.7),transparent)' }}>
-          <span style={{ fontSize:10, color:'rgba(255,255,255,0.65)', fontWeight:500 }}>
-            {node.data.label as string}
-          </span>
-        </div>
-        <div style={{ position:'absolute', top:8, right:8 }}>
-          <span style={{ fontSize:9, padding:'2px 6px', background:'#3BBDAF20', border:'1px solid #3BBDAF30',
-            borderRadius:4, color:'#3BBDAF', fontWeight:600 }}>{s.nodeImageDesc}</span>
+          style={{ width:'100%', height:'100%', objectFit:'cover', display:'block', opacity:0.85 }}/>
+        <div style={{ position:'absolute', left:0, right:0, bottom:0, padding:'18px 8px 7px',
+          background:'linear-gradient(to top,rgba(0,0,0,0.78),transparent)' }}>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+            {kws.map(k => (
+              <span key={k} style={{ fontSize:8.5, fontWeight:600, padding:'1.5px 6px',
+                borderRadius:4, background:'rgba(0,0,0,0.5)', border:'1px solid rgba(255,255,255,0.14)',
+                color:'#FFD9A8' }}>{k}</span>
+            ))}
+          </div>
         </div>
       </div>
     </>
@@ -517,42 +1248,110 @@ function ImageContent({ node }: { node: CanvasNode }) {
 const WF_A = [4,8,14,10,18,22,16,12,20,24,18,14,10,16,20,14,8,12,18,22,16,12,10,14,20,18,12,8,14,10,6,4]
 const WF_B = [6,12,20,16,10,8,14,22,18,12,16,20,14,10,18,22,20,16,12,8,14,18,22,16,10,12,18,14,8,10,12,6]
 
-function AudioContent({ node }: { node: CanvasNode }) {
+function AudioContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void }) {
   const s    = useLang()
   const isRef = node.data.isRef as boolean
   const color = isRef ? '#4BA35A' : '#F5A523'
   const wf    = isRef ? WF_B : WF_A
+  const [an, setAn] = useState(node.data.analysis as { bpm:number; key:string; style:string } | null | undefined)
+  const [playing,setPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const audioUrl = typeof node.data.audioUrl === 'string' ? node.data.audioUrl : ''
+  const guidePlayable = !!node.data.guidePlayable
+  useEffect(() => {
+    if (isRef && !an) {
+      const t = window.setTimeout(() => setAn({ bpm: 120, key: 'C Major', style: 'Pop / Funk' }), 1400)
+      return () => window.clearTimeout(t)
+    }
+  }, [isRef, an])
+  useEffect(() => () => audioRef.current?.pause(), [])
+  const toggleAudio = () => {
+    const audio = audioRef.current
+    if(guidePlayable && !audioUrl){
+      setPlaying(value=>!value)
+      onUpdateNodeData(node.id,{guidePlayedAt:Date.now()})
+      emitGuideEvent({type:'audio-play',nodeId:node.id})
+      return
+    }
+    if (!audioUrl || !audio) return
+    emitGuideEvent({type:'audio-play',nodeId:node.id})
+    if (audio.paused) void audio.play().then(()=>setPlaying(true)).catch(()=>setPlaying(false))
+    else { audio.pause(); setPlaying(false) }
+  }
   return (
     <>
-      <NodeHdr label={node.data.label as string} icon={isRef ? '🔗' : '🎤'} accent={color}/>
-      <div style={{ flex:1, padding:'8px 10px', display:'flex', alignItems:'center' }}>
-        <div style={{ width:28, height:28, borderRadius:6, background:color+'18', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill={color}><path d="M5 3l14 9-14 9V3z"/></svg>
-        </div>
-        <div style={{ flex:1, marginLeft:8 }}>
-          <div style={{ display:'flex', alignItems:'flex-end', gap:1.5, height:28 }}>
+      <NodeHdr label={trToken(String(node.data.label ?? ''), s)} icon={isRef ? '🔗' : '🎤'} accent={color}
+        editable onRename={v => onUpdateNodeData(node.id, { label: v })}/>
+      <div style={{ flex:1, minHeight:0, padding:'6px 9px 4px', display:'flex', alignItems:'center' }}>
+        <button type="button" className={guidePlayable?'guide-audio-hit':''} data-guide-target={`audio-play-${node.id}`} disabled={!audioUrl&&!guidePlayable} aria-label={playing?'暂停音频':'播放音频'}
+          onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();toggleAudio()}}
+          style={{ position:'relative', zIndex:guidePlayable?3:undefined, width:guidePlayable?48:24, height:guidePlayable?48:24, margin:guidePlayable?-12:0, padding:0, border:0, borderRadius:12, background:'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+            cursor:audioUrl||guidePlayable?'pointer':'default',opacity:audioUrl||guidePlayable?1:.72 }}>
+          <span style={{width:24,height:24,borderRadius:6,background:color+'18',display:'flex',alignItems:'center',justifyContent:'center',pointerEvents:'none'}}>
+            {playing
+              ? <svg width="9" height="9" viewBox="0 0 24 24" fill={color}><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+              : <svg width="9" height="9" viewBox="0 0 24 24" fill={color}><path d="M5 3l14 9-14 9V3z"/></svg>}
+          </span>
+        </button>
+        {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" onEnded={()=>setPlaying(false)} onPause={()=>setPlaying(false)}/>} 
+        <div style={{ flex:1, minWidth:0, marginLeft:7 }}>
+          <div style={{ display:'flex', alignItems:'flex-end', gap:1.5, height:20 }}>
             {wf.map((h, i) => (
-              <div key={i} style={{ width:3, borderRadius:2, height:h, background: i<10 ? color : '#2C2C2A', opacity: i<10 ? 0.9 : 0.6 }}/>
+              <div key={i} style={{ width:2.5, borderRadius:1.5, height:Math.round(h*0.82), background: i<10 ? color : '#2C2C2A', opacity: i<10 ? 0.9 : 0.6 }}/>
             ))}
           </div>
-          <div style={{ fontSize:10, color:'#4A4A48', marginTop:3, fontFamily:"'JetBrains Mono',monospace" }}>
+          <div style={{ fontSize:9, color:'#4A4A48', marginTop:2, fontFamily:"'JetBrains Mono',monospace" }}>
             {isRef ? s.ref : s.hum} · {node.data.duration as string}
           </div>
+          {isRef && (
+            <div style={{ fontSize:8.5, color:'#6A8A70', marginTop:1.5,
+              fontFamily:"'JetBrains Mono',monospace",
+              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+              title={trToken(String(node.data.fileName ?? ''), s)}>
+              {trToken(String(node.data.fileName ?? ''), s)}
+            </div>
+          )}
         </div>
       </div>
+      {isRef && (
+        <div style={{ flexShrink:0, margin:'0 7px 7px', padding:'4px 7px', background:'#4BA35A0D',
+          border:'1px solid #4BA35A25', borderRadius:6 }}
+          onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}>
+          {an ? (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:3, alignItems:'center' }}>
+              <span style={{ fontSize:7.5, fontWeight:800, color:'#5EC96E', letterSpacing:'0.04em',
+                marginRight:1 }}>✓</span>
+              <Chip label={`${an.bpm} BPM`} c="#5EC96E"/>
+              <Chip label={an.key} c="#5EC96E"/>
+              <Chip label={an.style.split(' / ')[0]} c="#5EC96E"/>
+            </div>
+          ) : (
+            <span style={{ fontSize:9, color:'#6A8A70', fontStyle:'italic' }}>识别中…</span>
+          )}
+        </div>
+      )}
     </>
+  )
+}
+
+function Chip({ label, c }: { label:string; c:string }) {
+  return (
+    <span style={{ fontSize:8, fontWeight:700, padding:'1px 5px', borderRadius:4,
+      background:c+'14', border:`1px solid ${c}30`, color:c, whiteSpace:'nowrap',
+      fontFamily:"'JetBrains Mono',monospace" }}>{label}</span>
   )
 }
 
 // ── Text ──────────────────────────────────────────────────────────────────────
 
-function TextContent({ node }: { node: CanvasNode }) {
+function TextContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void }) {
   const s = useLang()
   const [text, setText] = useState(node.data.content as string)
   const [focused, setFocused] = useState(false)
   return (
     <>
-      <NodeHdr label={s.hdrText} icon="T" accent="#6B6EF5"/>
+      <NodeHdr label={String(node.data.title ?? '') || s.hdrText} icon="T" accent="#6B6EF5"
+        editable onRename={v => onUpdateNodeData(node.id, { title: v })}/>
       <div style={{ flex:1, padding:'6px 10px', display:'flex' }}>
         <textarea
           value={text}
@@ -575,464 +1374,339 @@ function TextContent({ node }: { node: CanvasNode }) {
     </>
   )
 }
-
-// ── Mood ──────────────────────────────────────────────────────────────────────
-
-function MoodContent({ node }: { node: CanvasNode }) {
+function IntentContent({ node }: { node: CanvasNode }) {
   const s = useLang()
-  const colors = ['#F5A523','#E14D7B','#3BBDAF','#9B7EFF']
-  const [tags, setTags] = useState(node.data.tags as string[])
+  const [tags, setTags] = useState<{ t: string; locked: boolean }[]>(
+    (node.data.tags as { t: string; locked: boolean }[] | undefined) ?? []
+  )
   const [adding, setAdding] = useState(false)
-  const [newTag, setNewTag] = useState('')
+  const [val, setVal] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (adding) inputRef.current?.focus()
-  }, [adding])
-
-  function commitTag() {
-    const t = newTag.trim()
-    if (t) setTags(prev => [...prev, t])
-    setNewTag('')
-    setAdding(false)
-  }
+  useEffect(() => { if (adding) inputRef.current?.focus() }, [adding])
 
   return (
     <>
-      <div style={{ height:34, background:'#141413', borderBottom:'1px solid #2C2C2A',
-        display:'flex', alignItems:'center', padding:'0 10px', gap:7, flexShrink:0 }}>
-        <div style={{ width:18, height:18, borderRadius:4, background:'#9B7EFF20', border:'1px solid #9B7EFF40',
-          display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, color:'#9B7EFF', flexShrink:0 }}>✦</div>
-        <span style={{ fontSize:11, fontWeight:600, color:'#7A7A76', letterSpacing:'-0.01em', flex:1 }}>{s.hdrMood}</span>
-        <button
-          onClick={e => { e.stopPropagation(); setAdding(a => { if (!a) setNewTag(''); return !a }) }}
-          title="添加情绪"
-          style={{
-            width:20, height:20, borderRadius:5, border:'1px solid #2C2C2A',
-            background:'transparent', color:'#5A5A56',
-            fontSize:16, lineHeight:'1', cursor:'pointer', flexShrink:0,
-            display:'flex', alignItems:'center', justifyContent:'center',
-            fontFamily:"'Inter',sans-serif", transition:'color 0.1s, border-color 0.1s',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.color='#9B7EFF'; e.currentTarget.style.borderColor='#9B7EFF50' }}
-          onMouseLeave={e => { e.currentTarget.style.color='#5A5A56'; e.currentTarget.style.borderColor='#2C2C2A' }}
-        >+</button>
-      </div>
-      <div style={{ flex:1, padding:'8px 10px', display:'flex', flexWrap:'wrap', gap:5, alignContent:'flex-start' }}>
+      <NodeHdr label={s.nodeIntent} icon="◈" accent="#9B7EFF"/>
+      <div style={{ flex:1, padding:'8px 10px', display:'flex', flexWrap:'wrap', gap:4, alignContent:'flex-start' }}>
         {tags.map((tag, i) => (
-          <span key={i} style={{
-            fontSize:11, fontWeight:600, padding:'3px 9px', borderRadius:20,
-            background:colors[i%colors.length]+'18', border:`1px solid ${colors[i%colors.length]}30`,
-            color:colors[i%colors.length],
-          }}>{tag}</span>
+          <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:3,
+            fontSize:10.5, fontWeight:600, padding:'3px 9px', borderRadius:20,
+            background:'#9B7EFF18', border:`1px solid ${tag.locked ? '#9B7EFF60' : '#9B7EFF30'}`,
+            color: tag.locked ? '#C5B8FF' : '#9B7EFF' }}>
+            {tag.t}
+            <button onClick={e=>{ e.stopPropagation(); setTags(p => p.map((m,idx)=>idx===i?{...m,locked:!m.locked}:m)) }}
+              style={{ border:'none', background:'transparent', cursor:'pointer',
+                fontSize:8, padding:0, color: tag.locked ? '#C5B8FF' : '#9B7EFF70' }}>
+              {tag.locked ? '🔒' : '○'}
+            </button>
+          </span>
         ))}
-        {adding && (
-          <input
-            ref={inputRef}
-            value={newTag}
-            onChange={e => setNewTag(e.target.value)}
-            onClick={e => e.stopPropagation()}
-            onPointerDown={e => e.stopPropagation()}
-            onKeyDown={e => {
-              e.stopPropagation()
-              if (e.key === 'Enter') { e.preventDefault(); commitTag() }
-              if (e.key === 'Escape') { setAdding(false); setNewTag('') }
-            }}
-            onBlur={commitTag}
-            placeholder="新情绪…"
-            style={{
-              fontSize:11, padding:'3px 10px', borderRadius:20,
-              background:'#9B7EFF18', border:'1px dashed #9B7EFF50',
-              color:'#9B7EFF', outline:'none', width:76,
-              fontFamily:"'Inter',sans-serif",
-            }}
-          />
+        {adding ? (
+          <input ref={inputRef} value={val}
+            onChange={e=>setVal(e.target.value)}
+            onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
+            onKeyDown={e=>{ e.stopPropagation()
+              if (e.key==='Enter' && val.trim()) { setTags(p=>[...p,{t:val.trim(),locked:false}]); setVal(''); setAdding(false) }
+              if (e.key==='Escape') { setAdding(false); setVal('') } }}
+            onBlur={()=>{ if (val.trim()) { setTags(p=>[...p,{t:val.trim(),locked:false}]) } setVal(''); setAdding(false) }}
+            placeholder="__ADD__"
+            style={{ fontSize:10, padding:'2px 8px', borderRadius:20, background:'#141413',
+              border:'1px dashed #9B7EFF50', color:'#C5B8FF', outline:'none', width:80 }}/>
+        ) : (
+          <button onClick={e=>{ e.stopPropagation(); setAdding(true) }}
+            style={{ width:22, height:22, borderRadius:'50%', border:'1px dashed #9B7EFF40',
+              background:'transparent', color:'#9B7EFF80', cursor:'pointer', fontSize:13, lineHeight:1 }}>+</button>
         )}
       </div>
     </>
   )
 }
 
-// ── AI Explore — rich parameter panel ─────────────────────────────────────────
-
-const TIME_SIGS = ['4/4','3/4','6/8','5/4','7/8']
-
-function ExploreContent({ node, isGenerating, onGenerate }: {
-  node: CanvasNode; isGenerating: boolean; onGenerate: () => void
-}) {
+function ConstraintContent({ node }: { node: CanvasNode }) {
   const s = useLang()
-  const [mode,      setMode]      = useState<'create'|'remix'|'cover'>('create')
-  const [lyrics,    setLyrics]    = useState<'write'|'prompt'|'inst'>('write')
-  const [excludeEx, setExcludeEx] = useState('')
-  const [gender,    setGender]    = useState<'male'|'female'>('female')
-  const [bpm,       setBpm]       = useState(96)
-  const [bpmInput,  setBpmInput]  = useState('96')
-  const [timeSig,   setTimeSig]   = useState('4/4')
-  const [weirdness, setWeirdness] = useState(30)
-  const [styleFx,   setStyleFx]   = useState(50)
-  const [audioFx,   setAudioFx]   = useState(60)
-  const [durMode,   setDurMode]   = useState<'auto'|'custom'>('auto')
-  const [lockedDims, setLockedDims] = useState<Set<string>>(new Set(['melody','rhythm']))
-  const state = node.state
-
-  function toggleDim(key: string) {
-    setLockedDims(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-
-  function commitBpm(raw: string) {
-    const n = parseInt(raw, 10)
-    if (!isNaN(n)) { const v = Math.min(300, Math.max(20, n)); setBpm(v); setBpmInput(String(v)) }
-    else setBpmInput(String(bpm))
-  }
-
+  const [text, setText] = useState(trToken(node.data.text as string, s))
+  const [locked, setLocked] = useState(!!node.data.locked)
   return (
     <>
-      {/* Header */}
-      <div style={{
-        height:34, flexShrink:0,
-        background:'#141413', borderBottom:'1px solid #2C2C2A', borderTop:'2px solid #6B6EF5',
-        display:'flex', alignItems:'center', padding:'0 10px', gap:7,
-      }}>
-        <div style={{ width:18, height:18, borderRadius:4, background:'#6B6EF530', border:'1px solid #6B6EF560',
-          display:'flex', alignItems:'center', justifyContent:'center', fontSize:10 }}>⬡</div>
-        <span style={{ fontSize:11, fontWeight:700, color:'#8A8AFF' }}>{s.aiExplore}</span>
-        {state === 'done' && (
-          <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:4 }}>
-            <div style={{ width:5, height:5, borderRadius:'50%', background:'#5EC96E' }}/>
-            <span style={{ fontSize:9, color:'#5EC96E', fontWeight:600 }}>{s.generated}</span>
-          </div>
+      <div style={{ height:30, flexShrink:0, background:'#141413', borderBottom:'1px solid #2A1E20',
+        borderTop:'2px solid #E06A5A', display:'flex', alignItems:'center', padding:'0 10px', gap:6 }}>
+        <span style={{ fontSize:11 }}>{locked ? '🔒' : '🔓'}</span>
+        <span style={{ fontSize:10.5, fontWeight:700, color:'#E06A5A' }}>{s.nodeConstraintN}</span>
+        <button onClick={e=>{ e.stopPropagation(); setLocked(l=>!l) }}
+          style={{ marginLeft:'auto', fontSize:9, cursor:'pointer', background:'transparent',
+            border:'none', color: locked ? '#E06A5A' : '#5A5A56' }}>
+          {locked ? '必须保留' : '可调整'}
+        </button>
+      </div>
+      <input value={text} onChange={e=>setText(e.target.value)}
+        onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
+        placeholder={s.constraintPh}
+        style={{ flex:1, margin:'8px 10px', background:'transparent', border:'none', outline:'none',
+          color:'#D8A8A0', fontSize:11.5, fontWeight:600, fontStyle:text ? 'normal' : 'italic',
+          fontFamily:"'Inter',sans-serif" }}/>
+    </>
+  )
+}
+
+function QuestionContent({ node }: { node: CanvasNode }) {
+  const s = useLang()
+  const [answer, setAnswer] = useState('')
+  const [answered, setAnswered] = useState<string | null>((node.data.answered as string | null) ?? null)
+  const isAI = (node.data.source ?? 'ai') === 'ai'
+  const q = trToken(node.data.question as string, s)
+  return (
+    <>
+      <div style={{ height:30, flexShrink:0, background:'#141413', borderBottom:'1px solid #222220',
+        borderTop:`2px solid ${isAI ? '#F5C87A' : '#6B6EF5'}`, display:'flex', alignItems:'center', padding:'0 10px', gap:6 }}>
+        <span style={{ fontSize:8.5, fontWeight:800, padding:'1px 6px', borderRadius:4,
+          background:isAI?'#F5A52320':'#6B6EF520', color:isAI?'#F5C87A':'#8A8AFF', letterSpacing:'0.05em' }}>
+          {isAI ? 'AI ✦' : 'ME'}
+        </span>
+        <span style={{ fontSize:10.5, fontWeight:700, color:isAI?'#F5C87A':'#8A8AFF' }}>{s.nodeQuestionN}</span>
+        {answered && (
+          <span style={{ marginLeft:'auto', fontSize:9, color:'#5EC96E', fontWeight:600 }}>✓ {s.answeredTag}</span>
         )}
       </div>
-
-      {/* Body — all content shown flat, no scroll */}
-      <div style={{ flex:1, overflowY:'hidden', padding:'10px 12px', display:'flex', flexDirection:'column', gap:9 }}>
-
-        {/* Mode tabs */}
-        <div style={{ display:'flex', gap:2, background:'#141413', border:'1px solid #222220', borderRadius:7, padding:2 }}>
-          {(['create','remix','cover'] as const).map(m => (
-            <button key={m} onClick={e=>{ e.stopPropagation(); setMode(m) }}
-              style={{
-                flex:1, padding:'4px 0', borderRadius:5, border:'none',
-                background: mode===m ? '#2C2C2A' : 'transparent',
-                color: mode===m ? '#F0F0EE' : '#5A5A56',
-                fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:"'Inter',sans-serif",
-              }}>
-              {m==='create' ? s.mode_create : m==='remix' ? s.mode_remix : s.mode_cover}
-            </button>
-          ))}
-        </div>
-
-        {/* Lyrics type */}
-        <Param label={s.lyrics}>
-          <SegCtrl
-            opts={[{v:'write',l:s.lyricsWrite},{v:'prompt',l:s.lyricsPrompt},{v:'inst',l:s.lyricsInst}]}
-            val={lyrics} onChange={v => setLyrics(v as typeof lyrics)}
-          />
-        </Param>
-
-        {/* Exclude styles */}
-        <Param label={s.excludeStyles}>
-          <input value={excludeEx} onChange={e=>setExcludeEx(e.target.value)} onClick={e=>e.stopPropagation()}
-            placeholder={s.excludeStylesPlaceholder}
-            style={{
-              width:'100%', boxSizing:'border-box',
-              background:'#141413', border:'1px solid #2A2A28', borderRadius:5,
-              color:'#C0C0BC', fontSize:10, padding:'4px 8px',
-              fontFamily:"'Inter',sans-serif", outline:'none',
-            }}/>
-        </Param>
-
-        {/* Vocal — disabled when lyrics = instrumental */}
-        <div style={{ opacity: lyrics === 'inst' ? 0.32 : 1, pointerEvents: lyrics === 'inst' ? 'none' : 'auto', transition:'opacity 0.2s' }}>
-          <Param label={s.vocalGender}>
-            <SegCtrl
-              opts={[{v:'male',l:s.male},{v:'female',l:s.female}]}
-              val={gender} onChange={v => setGender(v as typeof gender)}
-            />
-          </Param>
-        </div>
-
-        {/* BPM — number input */}
-        <Param label={s.bpm}>
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <button
-              onPointerDown={e=>e.stopPropagation()}
-              onClick={e=>{ e.stopPropagation(); const v=Math.max(20,bpm-1); setBpm(v); setBpmInput(String(v)) }}
-              style={{ width:22, height:22, borderRadius:4, border:'1px solid #2A2A28', background:'#141413',
-                color:'#6A6A66', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
-                fontFamily:"'Inter',sans-serif", flexShrink:0, fontSize:13 }}>−</button>
-            <input
-              type="text" inputMode="numeric" value={bpmInput}
-              onChange={e => setBpmInput(e.target.value)}
-              onBlur={e => { e.stopPropagation(); commitBpm(bpmInput) }}
-              onKeyDown={e => { e.stopPropagation(); if(e.key==='Enter'){ e.preventDefault(); commitBpm(bpmInput) } }}
-              onPointerDown={e=>e.stopPropagation()}
-              onClick={e => e.stopPropagation()}
-              style={{
-                flex:1, textAlign:'center',
-                background:'#141413', border:'1px solid #2A2A28', borderRadius:5,
-                color:'#C0C0BC', fontSize:12, fontWeight:600, padding:'3px 4px',
-                fontFamily:"'JetBrains Mono',monospace", outline:'none',
-              }}/>
-            <button
-              onPointerDown={e=>e.stopPropagation()}
-              onClick={e=>{ e.stopPropagation(); const v=Math.min(300,bpm+1); setBpm(v); setBpmInput(String(v)) }}
-              style={{ width:22, height:22, borderRadius:4, border:'1px solid #2A2A28', background:'#141413',
-                color:'#6A6A66', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
-                fontFamily:"'Inter',sans-serif", flexShrink:0, fontSize:13 }}>+</button>
-          </div>
-        </Param>
-
-        {/* Time Signature */}
-        <Param label={s.timeSignature}>
-          <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
-            {TIME_SIGS.map(ts => (
-              <button key={ts} onClick={e=>{ e.stopPropagation(); setTimeSig(ts) }}
-                style={{
-                  padding:'3px 8px', borderRadius:4,
-                  background: timeSig===ts ? '#6B6EF520' : '#1A1A19',
-                  border:`1px solid ${timeSig===ts ? '#6B6EF550' : '#2A2A28'}`,
-                  color: timeSig===ts ? '#8A8AFF' : '#4A4A48',
-                  fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:"'JetBrains Mono',monospace",
-                }}>{ts}</button>
-            ))}
-          </div>
-        </Param>
-
-        {/* Tick sliders */}
-        <Param label={s.weirdness} value={weirdness.toString()}>
-          <TickSl value={weirdness} min={0} max={100} onChange={setWeirdness} color="#9B7EFF"/>
-        </Param>
-        <Param label={s.styleInfluence} value={styleFx.toString()}>
-          <TickSl value={styleFx} min={0} max={100} onChange={setStyleFx} color="#3BBDAF"/>
-        </Param>
-        <Param label={s.audioInfluence} value={audioFx.toString()}>
-          <TickSl value={audioFx} min={0} max={100} onChange={setAudioFx} color="#F5A523"/>
-        </Param>
-
-        {/* Duration */}
-        <Param label={s.duration}>
-          <SegCtrl
-            opts={[{v:'auto',l:s.durationAuto},{v:'custom',l:s.durationCustom}]}
-            val={durMode} onChange={v => setDurMode(v as typeof durMode)}
-          />
-        </Param>
-
-        {/* Explore dimension locks */}
-        <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
-          <span style={{ fontSize:10, color:'#5A5A56', fontWeight:500 }}>{s.exploreDimsTitle}</span>
-          <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
-            {([
-              { key:'melody',  label:s.dimMelody,  color:'#9B7EFF' },
-              { key:'harmony', label:s.dimHarmony, color:'#6B6EF5' },
-              { key:'rhythm',  label:s.dimRhythm,  color:'#3BBDAF' },
-              { key:'inst',    label:s.dimInst,    color:'#F5A523' },
-              { key:'texture', label:s.dimTexture, color:'#F06090' },
-              { key:'atmos',   label:s.dimAtmos,   color:'#7ABCC2' },
-            ]).map(dim => {
-              const locked = lockedDims.has(dim.key)
-              return (
-                <button key={dim.key}
-                  onClick={e=>{ e.stopPropagation(); toggleDim(dim.key) }}
-                  style={{
-                    display:'flex', alignItems:'center', gap:3,
-                    padding:'2px 7px', borderRadius:4, fontSize:9, fontWeight:600,
-                    cursor:'pointer', fontFamily:"'Inter',sans-serif", transition:'all 0.12s',
-                    background: locked ? dim.color+'18' : 'transparent',
-                    border:`1px solid ${locked ? dim.color+'45' : '#2A2A28'}`,
-                    color: locked ? dim.color : '#3A3A38',
-                  }}>
-                  <span style={{ fontSize:8, opacity:0.8 }}>{locked ? '🔒' : '○'}</span>
-                  {dim.label}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Generate */}
-        {isGenerating ? (
-          <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'#0F0F20',
-            border:'1px solid #202040', borderRadius:7, marginTop:2, flexShrink:0 }}>
-            <div style={{ display:'flex', gap:4 }}>
-              <div className="ai-dot-1" style={{ width:6, height:6, borderRadius:'50%', background:'#6B6EF5' }}/>
-              <div className="ai-dot-2" style={{ width:6, height:6, borderRadius:'50%', background:'#6B6EF5' }}/>
-              <div className="ai-dot-3" style={{ width:6, height:6, borderRadius:'50%', background:'#6B6EF5' }}/>
-            </div>
-            <span style={{ fontSize:11, color:'#6B6EF5', fontWeight:500 }}>{s.generating}</span>
+      <div style={{ flex:1, padding:'8px 11px', display:'flex', flexDirection:'column', gap:6 }}>
+        <div style={{ fontSize:11, color:'#D8D8D4', fontStyle:'italic', lineHeight:1.55 }}>{q}</div>
+        {!answered ? (
+          <div style={{ marginTop:'auto', display:'flex', gap:4 }}>
+            <input value={answer} onChange={e=>setAnswer(e.target.value)}
+              onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
+              onKeyDown={e=>{ e.stopPropagation(); if (e.key==='Enter' && answer.trim()) setAnswered(answer.trim()) }}
+              placeholder="写下想法…"
+              style={{ flex:1, minWidth:0, background:'#141413', border:'1px solid #2A2A28', borderRadius:5,
+                color:'#C0C0BC', fontSize:10, padding:'4px 8px', outline:'none' }}/>
+            <button onClick={e=>{ e.stopPropagation(); if (answer.trim()) setAnswered(answer.trim()) }}
+              style={{ width:24, height:24, borderRadius:5, border:'1px solid #6B6EF550',
+                background:'#6B6EF518', color:'#8A8AFF', cursor:'pointer', fontSize:11 }}>→</button>
           </div>
         ) : (
-          <button
-            onClick={e=>{ e.stopPropagation(); onGenerate() }}
-            style={{
-              padding:'9px', marginTop:2, flexShrink:0,
-              background:'linear-gradient(135deg,#6B6EF5,#9B7EFF)',
-              border:'none', borderRadius:7, color:'#fff', fontSize:12, fontWeight:700,
-              cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6,
-              fontFamily:"'Inter',sans-serif", boxShadow:'0 4px 16px #6B6EF530', transition:'opacity 0.12s',
-            }}
-            onMouseEnter={e=>{ e.currentTarget.style.opacity='0.85' }}
-            onMouseLeave={e=>{ e.currentTarget.style.opacity='1' }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
-            {s.generate}
-          </button>
+          <div style={{ marginTop:'auto', padding:'5px 8px', background:'#5EC96E08',
+            border:'1px solid #5EC96E25', borderRadius:5, fontSize:10, color:'#9AD4A6', lineHeight:1.45 }}>
+            “{answered}”
+          </div>
         )}
       </div>
     </>
   )
 }
 
-// Shared sub-components for ExploreContent
-
-function Param({ label, value, children }: { label:string; value?:string; children:React.ReactNode }) {
-  return (
-    <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-      <div style={{ display:'flex', justifyContent:'space-between' }}>
-        <span style={{ fontSize:10, color:'#5A5A56', fontWeight:500 }}>{label}</span>
-        {value && <span style={{ fontSize:10, color:'#7A7A76', fontFamily:"'JetBrains Mono',monospace" }}>{value}</span>}
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function SegCtrl({ opts, val, onChange }: {
-  opts: { v:string; l:string }[]; val:string; onChange:(v:string)=>void
-}) {
-  return (
-    <div style={{ display:'flex', gap:2, background:'#141413', border:'1px solid #222220', borderRadius:6, padding:2 }}>
-      {opts.map(o => (
-        <button key={o.v} onClick={e=>{ e.stopPropagation(); onChange(o.v) }}
-          style={{
-            flex:1, padding:'3px 0', borderRadius:4, border:'none',
-            background: val===o.v ? '#252523' : 'transparent',
-            color: val===o.v ? '#C0C0BC' : '#4A4A48',
-            fontSize:10, fontWeight:val===o.v ? 600 : 400, cursor:'pointer', fontFamily:"'Inter',sans-serif",
-          }}>{o.l}</button>
-      ))}
-    </div>
-  )
-}
-
-function TickSl({ value, min, max, onChange, color }: {
-  value:number; min:number; max:number; onChange:(v:number)=>void; color:string
-}) {
-  return (
-    <div style={{ position:'relative' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', padding:'0 1px', marginBottom:3 }}>
-        {Array.from({ length:11 }).map((_,i) => (
-          <div key={i} style={{ width:1, height:4, background:'#262624', borderRadius:1 }}/>
-        ))}
-      </div>
-      <input type="range" min={min} max={max} value={value}
-        onChange={e=>onChange(Number(e.target.value))}
-        onClick={e=>e.stopPropagation()}
-        onPointerDown={e=>e.stopPropagation()}
-        className="tick-slider" style={{ '--slider-color':color } as React.CSSProperties}/>
-    </div>
-  )
-}
-
-// ── Direction card ─────────────────────────────────────────────────────────────
-
-function DirActionBtn({ label, color, bg }: { label:string; color:string; bg?:string }) {
-  const base = bg ?? color+'14'
-  return (
-    <button
-      onClick={e => e.stopPropagation()}
-      style={{ flex:1, padding:'4px 0', fontSize:9, fontWeight:600, color, background:base,
-        border:`1px solid ${color}28`, borderRadius:5, cursor:'pointer',
-        fontFamily:"'Inter',sans-serif", transition:'background 0.1s',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.background = color+'2A' }}
-      onMouseLeave={e => { e.currentTarget.style.background = base }}
-    >{label}</button>
-  )
-}
-
-function DirectionContent({ node }: { node: CanvasNode }) {
+function NoteContent({ node }: { node: CanvasNode }) {
   const s = useLang()
-  const d = node.data; const color = d.color as string
+  const [text, setText] = useState(String(node.data.text ?? ''))
+  return (
+    <div style={{
+      width:'100%', height:'100%', background:'linear-gradient(180deg,#F5E6A8,#EBD98F)',
+      borderRadius:4, boxShadow:'0 4px 14px rgba(0,0,0,0.35)',
+      transform:'rotate(-1deg)', padding:'10px 11px', display:'flex', flexDirection:'column',
+    }}
+      onPointerDown={e=>e.stopPropagation()}>
+      <textarea value={text} onChange={e=>setText(e.target.value)}
+        onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
+        placeholder={s.notePh}
+        style={{ flex:1, resize:'none', background:'transparent', border:'none', outline:'none',
+          color:'#5A4E22', fontSize:11, lineHeight:1.55, fontStyle:'italic', fontFamily:"'Inter',sans-serif" }}/>
+    </div>
+  )
+}
+
+// ── Negotiated Interpretation（保留类型）──
+
+function InterpretationContent({ node }: { node: CanvasNode }) {
+  const s = useLang()
+  const [agreed, setAgreed] = useState(!!node.data.agreed)
+  const [editing, setEditing] = useState(false)
+  const [hyp, setHyp] = useState(s.hypothesisText)
+  const [whyOpen, setWhyOpen] = useState(false)
+  const [cores, setCores] = useState<Set<string>>(new Set())
+  const strong = [s.sigWarmImg, s.sigDescMelody, s.sigEndText]
+  const weak = [s.sigCityPopRef]
+  const SignalRow = ({ t, w }: { t:string; w?:boolean }) => (
+    <div style={{ display:'flex', alignItems:'center', gap:5, padding:'2.5px 0' }}>
+      <button onClick={()=>setCores(prev=>{const n=new Set(prev); n.has(t)?n.delete(t):n.add(t); return n})}
+        onPointerDown={e=>e.stopPropagation()} title={s.reweightB}
+        style={{ width:14, height:14, flexShrink:0, borderRadius:'50%', cursor:'pointer',
+          border:'none', background: cores.has(t) ? '#F5C87A30' : 'transparent',
+          color: cores.has(t) ? '#F5C87A' : '#3A3A38', fontSize:9, lineHeight:1 }}>{cores.has(t)?'★':'☆'}</button>
+      <span style={{ fontSize:10.5, color: w ? '#6A6A66' : '#B8B8B4' }}>{t}</span>
+      {cores.has(t) && <span style={{ fontSize:8, fontWeight:800, color:'#F5C87A' }}>{s.centralTag}</span>}
+      <span style={{ marginLeft:'auto', width:5, height:5, borderRadius:'50%',
+        background: w ? '#3A3A38' : '#5EC96E', flexShrink:0 }}/>
+    </div>
+  )
   return (
     <>
       <div style={{ height:34, flexShrink:0, background:'#141413', borderBottom:'1px solid #2C2C2A',
-        borderTop:`2px solid ${color}`, display:'flex', alignItems:'center', padding:'0 10px', gap:6 }}>
-        <span style={{ fontSize:10, fontWeight:800, padding:'1px 6px', borderRadius:4, background:color+'20', color, flexShrink:0 }}>
-          {d.label as string}
-        </span>
-        <span style={{ fontSize:11, fontWeight:600, color:'#C0C0BC', flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{d.name as string}</span>
-        {!!d.mainDim && (
-          <span style={{ fontSize:8, fontWeight:700, padding:'1px 7px', borderRadius:10,
-            background:color+'18', border:`1px solid ${color}35`, color, flexShrink:0, whiteSpace:'nowrap' }}>
-            {d.mainDim as string}
-          </span>
-        )}
-        <span style={{ fontSize:9, fontWeight:600, padding:'1px 6px', borderRadius:10,
-          background:'#1E1E1C', border:'1px solid #2C2C2A', color:'#4A4A48', flexShrink:0 }}>{s.demoLabel}</span>
+        borderTop:'2px solid #6B6EF5', display:'flex', alignItems:'center', padding:'0 10px', gap:7 }}>
+        <div style={{ width:18, height:18, borderRadius:4, background:'#6B6EF530', border:'1px solid #6B6EF560',
+          display:'flex', alignItems:'center', justifyContent:'center', fontSize:10 }}>✦</div>
+        <span style={{ fontSize:11, fontWeight:700, color:'#8A8AFF' }}>{s.aiUnderstanding}</span>
+        {agreed && <span style={{ marginLeft:'auto', fontSize:9, fontWeight:700, color:'#5EC96E' }}>✓</span>}
       </div>
-      <div style={{ flex:1, padding:'8px 12px 10px', display:'flex', flexDirection:'column', gap:6, overflow:'hidden' }}>
-        {/* Tags */}
-        <div style={{ display:'flex', alignItems:'center', gap:4, flexWrap:'wrap' }}>
-          {(d.tags as string[]).map(t => (
-            <span key={t} style={{ fontSize:9, padding:'2px 7px', background:'#222220', borderRadius:20, color:'#5A5A56', fontWeight:500 }}>{t}</span>
-          ))}
+      <div style={{ flex:1, minHeight:0, overflowY:'auto', padding:'10px 12px', display:'flex', flexDirection:'column', gap:9 }} className="thin-scroll">
+        <div style={{ padding:'8px 10px', background:'#14141E', border:'1px solid #23233A',
+          borderLeft:'2px solid #6B6EF5', borderRadius:6 }}>
+          <div style={{ fontSize:8.5, fontWeight:800, color:'#6A6A8A', textTransform:'uppercase',
+            letterSpacing:'0.06em', marginBottom:3 }}>{s.hypothesisL}</div>
+          {editing ? (
+            <textarea value={hyp} onChange={e=>setHyp(e.target.value)}
+              onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
+              style={{ width:'100%', boxSizing:'border-box', minHeight:52, resize:'none',
+              background:'#0F0F18', border:'1px solid #2C2C44', borderRadius:5,
+              color:'#C8C8E8', fontSize:10.5, lineHeight:1.5, outline:'none', padding:6 }}/>
+          ) : (
+            <div style={{ fontSize:11, color:'#C8C8E8', fontStyle:'italic', lineHeight:1.55 }}>{hyp}</div>
+          )}
         </div>
-        <div style={{ height:1, background:'#222220', flexShrink:0 }}/>
-        {/* Properties */}
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          {([
-            ['mood',    s.mood],
-            ['style',   s.style],
-            ['texture', s.texture],
-            ['rhythm',  s.rhythm],
-          ] as const).map(([k, label]) => (
-            <div key={k} style={{ display:'flex', justifyContent:'space-between' }}>
-              <span style={{ fontSize:10, color:'#4A4A48' }}>{label}</span>
-              <span style={{ fontSize:10, color:'#8A8A86', textAlign:'right', maxWidth:110 }}>{d[k] as string}</span>
-            </div>
-          ))}
-        </div>
-        {/* Energy */}
         <div>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
-            <span style={{ fontSize:9, color:'#4A4A48' }}>{s.energy}</span>
-            <span style={{ fontSize:9, color:'#7A7A76', fontFamily:"'JetBrains Mono',monospace" }}>{d.energy as number}%</span>
-          </div>
-          <div style={{ height:3, background:'#222220', borderRadius:2 }}>
-            <div style={{ height:'100%', width:`${d.energy as number}%`, background:color, borderRadius:2, opacity:0.8 }}/>
-          </div>
+          <div style={{ fontSize:8.5, fontWeight:800, color:'#5EC96E90', textTransform:'uppercase',
+            letterSpacing:'0.06em', marginBottom:2 }}>{s.strongSignals}</div>
+          {strong.map(t => <SignalRow key={t} t={t}/>)}
+          <div style={{ fontSize:8.5, fontWeight:800, color:'#5A5A66', textTransform:'uppercase',
+            letterSpacing:'0.06em', margin:'5px 0 2px' }}>{s.weakSignals}</div>
+          {weak.map(t => <SignalRow key={t} t={t} w/>)}
         </div>
-        {/* Action buttons */}
-        <div style={{ marginTop:'auto', display:'flex', gap:4 }}>
-          <DirActionBtn label={s.exploreFurther} color={color}/>
-          <DirActionBtn label={s.addToCompare} color="#7A7A78"/>
+        <div style={{ padding:'7px 9px', background:'#F5A52308', border:'1px dashed #F5A52340', borderRadius:6 }}>
+          <div style={{ fontSize:8.5, fontWeight:800, color:'#F5A52390', textTransform:'uppercase',
+            letterSpacing:'0.06em', marginBottom:2 }}>{s.uncertainLabel}</div>
+          <div style={{ fontSize:10, color:'#C0B8A8', lineHeight:1.5 }}>{s.uncertainText}</div>
+        </div>
+        {whyOpen && (
+          <div style={{ padding:'7px 9px', background:'#141413', border:'1px solid #222220', borderRadius:6,
+            fontSize:10, color:'#8A8A86', lineHeight:1.55 }}>{s.askWhyAns}</div>
+        )}
+        <div style={{ marginTop:'auto', display:'flex', flexDirection:'column', gap:4 }}>
+          <div style={{ display:'flex', gap:4 }}>
+            <IBtn label={editing ? '✓' : '✎ Edit'} onClick={()=>setEditing(e=>!e)}/>
+            <IBtn label={s.askWhyB} onClick={()=>setWhyOpen(w=>!w)}/>
+          </div>
+          <button onPointerDown={e=>e.stopPropagation()} onClick={()=>setAgreed(a=>!a)}
+            style={{ padding:'8px', borderRadius:7, cursor:'pointer',
+              background: agreed ? '#1E2A22' : 'linear-gradient(135deg,#6B6EF5,#9B7EFF)',
+              border: agreed ? '1px solid #5EC96E45' : '1px solid transparent',
+              color: agreed ? '#5EC96E' : '#fff', fontSize:11.5, fontWeight:800 }}>
+            {agreed ? `✓ ${s.agreeB}` : s.agreeB}
+          </button>
         </div>
       </div>
     </>
   )
 }
 
-// ── Fuse ──────────────────────────────────────────────────────────────────────
+function IBtn({ label, onClick }: { label:string; onClick:()=>void }) {
+  return (
+    <button onPointerDown={e=>e.stopPropagation()} onClick={onClick}
+      style={{ flex:1, padding:'5px 0', background:'#1E1E1C', border:'1px solid #2C2C2A',
+        borderRadius:5, color:'#8A8A86', fontSize:9.5, fontWeight:600, cursor:'pointer' }}>{label}</button>
+  )
+}
 
-function FuseContent({ node }: { node: CanvasNode }) {
+function FieldContent({ node }: { node: CanvasNode }) {
+  const s = useLang()
+  const [name, setName] = useState(String(node.data.name ?? ''))
+  return (
+    <div style={{ width:'100%', height:'100%', position:'relative', pointerEvents:'none' }}>
+      <div style={{ position:'absolute', inset:0, borderRadius:18,
+        background:'radial-gradient(120% 120% at 30% 20%, rgba(107,110,245,0.055), rgba(59,189,175,0.03) 60%, rgba(107,110,245,0.02))',
+        border:'1.5px dashed rgba(120,122,245,0.22)' }}/>
+      <div style={{ position:'absolute', top:-11, left:16, display:'flex', alignItems:'center', gap:6 }}
+        onPointerDown={e=>e.stopPropagation()}>
+        <span style={{ fontSize:8.5, fontWeight:800, letterSpacing:'0.08em', textTransform:'uppercase',
+          color:'#8A8AFF', background:'#14141E', border:'1px solid #2C2C44', borderRadius:6, padding:'2px 8px' }}>
+          ▢ {s.fieldNode}
+        </span>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder={s.fieldPh}
+          onClick={e=>e.stopPropagation()} onPointerDown={e=>{ e.stopPropagation(); (e.target as HTMLElement).focus() }}
+          style={{ width:150, background:'rgba(20,20,25,0.85)', border:'1px solid #2C2C44', borderRadius:6,
+            color:'#C8C8E8', fontSize:10.5, fontWeight:600, padding:'3px 8px', outline:'none',
+            fontStyle: name ? 'normal' : 'italic', pointerEvents:'auto' }}/>
+      </div>
+    </div>
+  )
+}
+
+// ── Node content router ──
+
+function NodeContent({ node, inbound, compareIds, actions, onExport, nodes, wires, langS, onUpdateNodeData, onDivergeFrame, onGenerateAudioFolder, onOpenDemoDetail, onExtractSource, onRemoveSource, lyricsPreviewOpen, onToggleLyricsPreview }: {
+  node: CanvasNode; inbound: InboundRef[]
+  compareIds: string[]
+  actions: IdeationActions; onExport: () => void
+  nodes: CanvasNode[]; wires: Wire[]; langS: ReturnType<typeof useLang>
+  onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
+  onDivergeFrame: (frameId: string) => void
+  onGenerateAudioFolder: (folderId: string) => void
+  onOpenDemoDetail: (id: string) => void
+  onExtractSource: (folderId: string, source: import('./canvas/model').WorkSource, x: number, y: number) => void
+  onRemoveSource: (folderId: string, sourceId: string) => void
+  lyricsPreviewOpen?: boolean
+  onToggleLyricsPreview?: () => void
+}) {
+  switch (node.type) {
+    case 'image':          return <ImageContent node={node} onUpdateNodeData={onUpdateNodeData}/>
+    case 'audio':          return <AudioContent node={node} onUpdateNodeData={onUpdateNodeData}/>
+    case 'text':           return <TextContent node={node} onUpdateNodeData={onUpdateNodeData}/>
+    case 'intent':         return <IntentContent node={node}/>
+    case 'constraint':     return <ConstraintContent node={node}/>
+    case 'question':       return <QuestionContent node={node}/>
+    case 'note':           return <NoteContent node={node}/>
+    case 'interpretation': return <InterpretationContent node={node}/>
+    case 'field':          return <FieldContent node={node}/>
+    case 'lyrics':         return <LyricsContent node={node} onUpdateNodeData={onUpdateNodeData} previewOpen={lyricsPreviewOpen} onTogglePreview={onToggleLyricsPreview}/>
+    case 'frame':          return <FrameContent node={node} nodes={nodes} wires={wires} langS={langS} onUpdateNodeData={onUpdateNodeData} onDivergeFrame={onDivergeFrame}/>
+    case 'audioFolder':    return <AudioFolderContent node={node} nodes={nodes} wires={wires} onUpdateNodeData={onUpdateNodeData} onGenerate={onGenerateAudioFolder} onExtractSource={onExtractSource} onRemoveSource={onRemoveSource}/>
+    case 'work':           return <WorkContent node={node} onOpenDetail={onOpenDemoDetail}/>
+    case 'prompt':         return <PromptContent node={node}/>
+    case 'direction':      return <DirectionContent node={node} onOpenDetail={onOpenDemoDetail}/>
+    case 'fuse':           return <FuseContent node={node} inbound={inbound}/>
+    case 'brief':          return <BriefContent node={node} onExport={onExport}/>
+    case 'result':         return <SelectedDirectionContent node={node} onExport={onExport}/>
+    default:               return null
+  }
+}
+
+// 占位 token → 当前语言文案
+function trToken(v: string | undefined, s: ReturnType<typeof useLang>): string {
+  const map: Record<string,string> = {
+    '__Q_WHICH__': s.qWhichElem,
+    '__Q_CHALLENGE__': s.challengeQ,
+    '__L_INSPIRED__': s.lInspired,
+    '__L_PRESERVE__': s.lPreserve,
+    '__L_INTERPRET__': s.lInterpretW,
+    '__L_BRANCH__': s.branchFrom,
+    '__L_FUSE__': s.actFuse,
+    '__CORE_IDEA__': s.coreIdeaText,
+    '__IMG__': s.nodeImage,
+    '__HUM__': s.addHumClip,
+    '__REF__': s.addRefAudio,
+    '__EXPLORE__': s.aiExplore,
+    '__FUSE__': s.hdrFuse,
+    '__ASK_TENSION__': s.askTension,
+    '__OPT_MELODY__': s.optMelody,
+    '__OPT_REF__': s.optRef,
+    '__OPT_BALANCE__': s.optBalance,
+  }
+  return (v && map[v]) || (v ?? '')
+}
+
+interface IdeationActions {
+  onCommit:(id:string)=>void
+  onCompareToggle:(id:string)=>void
+}
+
+// ── Fuse（保留能力，暂不在默认流）──
+
+function FuseContent({ node, inbound: _inbound }: { node: CanvasNode; inbound: InboundRef[] }) {
   const s = useLang()
   const d = node.data
   const inheritsA = (d.inheritsA as string[] | undefined) ?? []
   const inheritsB = (d.inheritsB as string[] | undefined) ?? []
-
   function TraitChip({ label, color }: { label:string; color:string }) {
     return (
       <span style={{ fontSize:9, padding:'2px 7px', borderRadius:12,
         background:color+'18', border:`1px solid ${color}35`, color, fontWeight:600 }}>{label}</span>
     )
   }
-
   return (
     <>
       <div style={{ height:34, flexShrink:0, background:'#141413', borderBottom:'1px solid #2C2C2A',
@@ -1041,29 +1715,25 @@ function FuseContent({ node }: { node: CanvasNode }) {
         <span style={{ fontSize:11, fontWeight:700, color:'#F06090' }}>{s.hdrFuse}</span>
       </div>
       <div style={{ flex:1, padding:'10px 12px', display:'flex', flexDirection:'column', gap:7 }}>
-        {/* From A */}
         <div>
-          <div style={{ fontSize:9, color:'#F5A52390', fontWeight:600, marginBottom:4, letterSpacing:'0.04em' }}>{s.fromDirA}</div>
+          <div style={{ fontSize:9, color:'#F5A52390', fontWeight:600, marginBottom:4 }}>{s.fromDirA}</div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
             {inheritsA.length > 0 ? inheritsA.map(t => <TraitChip key={t} label={t} color="#F5A523"/>) :
               <span style={{ fontSize:9, color:'#3A3A38' }}>{s.fuseOpen}</span>}
           </div>
         </div>
-        {/* Arrow divider */}
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           <div style={{ flex:1, height:1, background:'#1E1E1C' }}/>
           <span style={{ fontSize:11, color:'#F0609050' }}>⊕</span>
           <div style={{ flex:1, height:1, background:'#1E1E1C' }}/>
         </div>
-        {/* From B */}
         <div>
-          <div style={{ fontSize:9, color:'#7A7A7890', fontWeight:600, marginBottom:4, letterSpacing:'0.04em' }}>{s.fromDirB}</div>
+          <div style={{ fontSize:9, color:'#7A7A7890', fontWeight:600, marginBottom:4 }}>{s.fromDirB}</div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
             {inheritsB.length > 0 ? inheritsB.map(t => <TraitChip key={t} label={t} color="#7A7A78"/>) :
               <span style={{ fontSize:9, color:'#3A3A38' }}>{s.fuseOpen}</span>}
           </div>
         </div>
-        {/* Output */}
         <div style={{ marginTop:'auto', padding:'5px 8px', background:'#F0609010', border:'1px solid #F0609025', borderRadius:6 }}>
           <div style={{ fontSize:9, color:'#F06090', fontWeight:600 }}>{s.fuseOutputLabel}</div>
         </div>
@@ -1132,187 +1802,208 @@ function BriefContent({ node, onExport }: { node: CanvasNode; onExport: () => vo
   )
 }
 
-// ── Result Audio — eye-catching output card ────────────────────────────────────
+// ── Selected Direction / Creative Brief（终点：Ready to Produce）───────────────
 
-const RES_WF = [6,10,16,12,20,26,22,14,18,28,32,26,20,14,18,24,30,26,18,12,16,22,28,32,26,20,14,10,16,24,28,22,16,12,18,24,30,28,20,14,10,16,22,26,20,14,10,8,12,16]
-const [RES_PLAYED] = [18]
+const SD_WF = [6,10,16,12,20,26,22,14,18,28,32,26,20,14,18,24,30,26,18,12,16,22,28,32,26,20,14,10,16,24]
 
-function ResultContent({ node, onExport }: { node: CanvasNode; onExport: () => void }) {
-  const s     = useLang()
-  const [playing, setPlaying] = useState(false)
-  const title  = node.data.title as string
-  const bpm    = node.data.bpm as number
-  const key    = node.data.key as string
-  const dur    = node.data.duration as string
+function SelectedDirectionContent({ node, onExport }: { node: CanvasNode; onExport: () => void }) {
+  const s = useLang()
+  const [committed, setCommitted] = useState(false)
+  const [transOpen, setTransOpen] = useState(false)
+  const [reflection, setReflection] = useState(String(node.data.reflection ?? ''))
+  const [reflSaved, setReflSaved] = useState(false)
+  const d = node.data
+  const openQ = Number(d.openQ ?? 0)
+  const confident = openQ === 0
+  const title = trToken(d.title as string, s)
+  const dna = (d.dna as string[] | undefined) ?? []
+  const constraints = ((d.constraints as string[] | undefined) ?? []).map(c => trToken(c, s))
+  const evolution = trToken(d.evolution as string, s)
 
   return (
     <div style={{
       width:'100%', height:'100%',
-      background:'linear-gradient(160deg, #0C1E22 0%, #111610 40%, #0F1220 100%)',
-      borderRadius:14,
-      display:'flex', flexDirection:'column',
-      overflow:'hidden',
-      position:'relative',
+      background:'linear-gradient(160deg,#0E1A22 0%,#111610 40%,#101020 100%)',
+      borderRadius:14, display:'flex', flexDirection:'column', overflow:'hidden', position:'relative',
     }}>
-      {/* Ambient glow layer */}
-      <div style={{
-        position:'absolute', top:-60, left:-30, width:200, height:200,
-        borderRadius:'50%',
-        background:'radial-gradient(circle, #3BBDAF08 0%, transparent 70%)',
-        pointerEvents:'none',
-      }}/>
-      <div style={{
-        position:'absolute', bottom:-40, right:-20, width:160, height:160,
-        borderRadius:'50%',
-        background:'radial-gradient(circle, #6B6EF508 0%, transparent 70%)',
-        pointerEvents:'none',
-      }}/>
-
       {/* Header */}
-      <div style={{
-        height:38, flexShrink:0,
-        borderBottom:'1px solid #1C3035',
-        display:'flex', alignItems:'center', padding:'0 14px', gap:8,
-        background:'rgba(0,0,0,0.2)',
-      }}>
-        <div style={{
-          width:20, height:20, borderRadius:5,
-          background:'linear-gradient(135deg,#3BBDAF25,#6B6EF515)',
-          border:'1px solid #3BBDAF35',
-          display:'flex', alignItems:'center', justifyContent:'center', fontSize:11,
-        }}>✦</div>
-        <span style={{ fontSize:11, fontWeight:700, color:'#3BBDAF', letterSpacing:'-0.01em' }}>{s.hdrResult}</span>
-        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:5 }}>
-          {(node.data.status as string | undefined) === 'final' ? (
-            <>
-              <div style={{ width:5, height:5, borderRadius:'50%', background:'#5EC96E', boxShadow:'0 0 5px #5EC96E70' }}/>
-              <span style={{ fontSize:9, color:'#5EC96E', fontWeight:600 }}>{s.resultFinalLabel}</span>
-            </>
-          ) : (node.data.status as string | undefined) === 'draft' ? (
-            <>
-              <div style={{ width:5, height:5, borderRadius:'50%', background:'#7A7A78' }}/>
-              <span style={{ fontSize:9, color:'#7A7A78', fontWeight:600 }}>{s.resultDraftLabel}</span>
-            </>
-          ) : (
-            <>
-              <div style={{ width:5, height:5, borderRadius:'50%', background:'#F5A523', boxShadow:'0 0 5px #F5A52360' }}/>
-              <span style={{ fontSize:9, color:'#F5A523', fontWeight:600 }}>{s.resultCandidateLabel}</span>
-            </>
-          )}
+      <div style={{ height:38, flexShrink:0, borderBottom:'1px solid #1C3035',
+        display:'flex', alignItems:'center', padding:'0 14px', gap:8, background:'rgba(0,0,0,0.2)' }}>
+        <div style={{ width:20, height:20, borderRadius:5,
+          background:'linear-gradient(135deg,#3BBDAF25,#6B6EF515)', border:'1px solid #3BBDAF35',
+          display:'flex', alignItems:'center', justifyContent:'center', fontSize:11 }}>✓</div>
+        <span style={{ fontSize:11, fontWeight:700, color:'#3BBDAF' }}>{s.selectedDir}</span>
+        {committed && (
+          <span style={{ marginLeft:'auto', fontSize:9, fontWeight:700, padding:'2px 8px',
+            borderRadius:10, background:'#5EC96E15', border:'1px solid #5EC96E40', color:'#5EC96E' }}>
+            {s.committedTag}
+          </span>
+        )}
+      </div>
+
+      <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:10 }} className="thin-scroll">
+        {/* §29 Decision Confidence 提示（不阻止 Commit） */}
+        <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 9px',
+          borderRadius:7, background: confident ? '#5EC96E0C' : '#F5C87A0A',
+          border:`1px solid ${confident ? '#5EC96E30' : '#F5C87A35'}` }}>
+          <span style={{ width:6, height:6, borderRadius:'50%', background: confident ? '#5EC96E' : '#F5C87A' }}/>
+          <span style={{ fontSize:9.5, fontWeight:700, color: confident ? '#5EC96E' : '#F5C87A' }}>
+            {confident ? s.confReady : `${s.confStill} · ${openQ} ${s.openQ}`}
+          </span>
+        </div>
+
+        {/* Title */}
+        <div>
+          <div style={{ fontSize:15.5, fontWeight:700, color:'#E8E8E4', letterSpacing:'-0.02em', lineHeight:1.3 }}>{title}</div>
+          <div style={{ display:'flex', gap:7, marginTop:4 }}>
+            <span style={{ fontSize:9.5, color:'#3A5055', fontFamily:"'JetBrains Mono',monospace" }}>{String(d.duration ?? '')}</span>
+            <span style={{ fontSize:9.5, color:'#3A5055', fontFamily:"'JetBrains Mono',monospace" }}>{String(d.bpm ?? '')} BPM</span>
+            <span style={{ fontSize:9.5, color:'#3A5055', fontFamily:"'JetBrains Mono',monospace" }}>{String(d.key ?? '')}</span>
+          </div>
+        </div>
+
+        {/* Core Idea */}
+        <div style={{ padding:'7px 9px', background:'#141413', borderLeft:'2px solid #3BBDAF60', borderRadius:6 }}>
+          <div style={{ fontSize:8.5, color:'#4A4A48', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:2 }}>{s.coreIdea}</div>
+          <div style={{ fontSize:10.5, color:'#B8C4C2', fontStyle:'italic', lineHeight:1.5 }}>“{trToken(String(d.coreIdea ?? ''), s)}”</div>
+        </div>
+
+        {/* DNA chips */}
+        <div>
+          <div style={{ fontSize:8.5, color:'#4A4A48', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4 }}>Creative DNA</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
+            {dna.map(c => (
+              <span key={c} style={{ fontSize:9.5, fontWeight:600, padding:'2px 8px', borderRadius:20,
+                background:'#3BBDAF12', border:'1px solid #3BBDAF28', color:'#5FCFC3' }}>{c}</span>
+            ))}
+          </div>
+        </div>
+
+        {/* Constraints */}
+        <div>
+          <div style={{ fontSize:8.5, color:'#4A4A48', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4 }}>{s.constraintsTitle}</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+            {constraints.map((c,i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:5, fontSize:10, color:'#C0C0BC' }}>
+                🔒 {c}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Evolution path */}
+        <div>
+          <div style={{ fontSize:8.5, color:'#4A4A48', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4 }}>{s.evoPath}</div>
+          <div style={{ fontSize:10, color:'#8A8AFF', fontFamily:"'JetBrains Mono',monospace", lineHeight:1.6,
+            padding:'6px 8px', background:'#14141E', border:'1px solid #222238', borderRadius:6 }}>
+            {evolution}
+          </div>
+        </div>
+
+        {/* Sketch waveform */}
+        <div style={{ display:'flex', alignItems:'center', gap:1.2, height:34 }}>
+          {SD_WF.map((h,i) => (
+            <div key={i} style={{ flex:1, borderRadius:2, height:Math.max(3,h*0.85),
+              background: i<12 ? 'linear-gradient(to top,#3BBDAF70,#3BBDAF30)' : '#1C3035' }}/>
+          ))}
         </div>
       </div>
 
-      {/* Track info */}
-      <div style={{ padding:'14px 14px 0' }}>
-        <div style={{ fontSize:16, fontWeight:700, color:'#E8E8E4', letterSpacing:'-0.03em', marginBottom:3 }}>
-          {title}
-        </div>
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-          <span style={{ fontSize:10, color:'#3A5055', fontFamily:"'JetBrains Mono',monospace" }}>{dur}</span>
-          <div style={{ width:1, height:10, background:'#1E3035' }}/>
-          <span style={{ fontSize:10, color:'#3A5055', fontFamily:"'JetBrains Mono',monospace" }}>{bpm} BPM</span>
-          <div style={{ width:1, height:10, background:'#1E3035' }}/>
-          <span style={{ fontSize:10, color:'#3A5055', fontFamily:"'JetBrains Mono',monospace" }}>{key}</span>
-        </div>
-      </div>
+      {/* Actions */}
+      <div style={{ padding:'10px 14px 13px', borderTop:'1px solid #152025', display:'flex', flexDirection:'column', gap:6 }}>
+        {!committed ? (
+          <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); setCommitted(true) }}
+            style={{ width:'100%', padding:'9px', background:'linear-gradient(135deg,#3BBDAF,#2EA89B)',
+              border:'none', borderRadius:8, color:'#06201E', fontSize:12, fontWeight:800, cursor:'pointer',
+              fontFamily:"'Inter',sans-serif", boxShadow:'0 4px 20px #3BBDAF35' }}>
+            ✓ {s.commitDirection}
+          </button>
+        ) : (
+          <>
+            {/* §38 Reflection */}
+            {!reflSaved ? (
+              <div style={{ padding:'7px 9px', background:'#14141E', border:'1px solid #23233A', borderRadius:7 }}>
+                <div style={{ fontSize:9.5, color:'#8A8AFF', fontWeight:700, marginBottom:4 }}>{s.reflectQ}</div>
+                <input value={reflection} onChange={e=>setReflection(e.target.value)}
+                  onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
+                  placeholder={s.reflectPh}
+                  style={{ width:'100%', boxSizing:'border-box', background:'#0F0F18',
+                    border:'1px solid #2C2C44', borderRadius:5, color:'#C8C8E8', fontSize:10,
+                    padding:'5px 8px', outline:'none', marginBottom:5 }}/>
+                <div style={{ display:'flex', gap:4 }}>
+                  <button onPointerDown={e=>e.stopPropagation()}
+                    onClick={()=>{ if (reflection.trim()) setReflSaved(true) }}
+                    style={{ flex:1, padding:'4px', background:'#6B6EF525', border:'none',
+                      borderRadius:4, color:'#A8AAFF', fontSize:9, fontWeight:700, cursor:'pointer' }}>✓</button>
+                  <button onPointerDown={e=>e.stopPropagation()} onClick={()=>setReflSaved(true)}
+                    style={{ flex:1, padding:'4px', background:'transparent', border:'1px solid #2C2C2A',
+                      borderRadius:4, color:'#5A5A56', fontSize:9, cursor:'pointer' }}>{s.reflectSkip}</button>
+                </div>
+              </div>
+            ) : reflSaved && reflection.trim() ? (
+              <div style={{ fontSize:9.5, color:'#9AD4A6', fontStyle:'italic', lineHeight:1.5,
+                padding:'5px 8px', background:'#5EC96E08', borderRadius:6, border:'1px solid #5EC96E20' }}>
+                “{reflection}”
+              </div>
+            ) : null}
 
-      {/* Waveform */}
-      <div style={{ flex:1, padding:'14px 14px 0', display:'flex', flexDirection:'column', justifyContent:'center' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:1.5, height:56, position:'relative' }}>
-          {RES_WF.map((h, i) => {
-            const played = i < RES_PLAYED
-            return (
-              <div key={i} style={{
-                flex:1, borderRadius:2,
-                height: Math.max(3, h * 0.9),
-                background: played
-                  ? `linear-gradient(to top, #3BBDAF60, #3BBDAF25)`
-                  : '#1C3035',
-                opacity: played ? 0.9 : 0.55,
-                transition:'height 0.05s',
-              }}/>
-            )
-          })}
-          {/* Playhead line */}
-          <div style={{
-            position:'absolute',
-            left:`${(RES_PLAYED / RES_WF.length) * 100}%`,
-            top:0, bottom:0,
-            width:1.5, background:'#3BBDAF',
-            boxShadow:'0 0 6px #3BBDAF80',
-          }}/>
-        </div>
-        {/* Progress track */}
-        <div style={{ height:2, background:'#152025', borderRadius:2, marginTop:6, position:'relative' }}>
-          <div style={{ height:'100%', width:`${(RES_PLAYED / RES_WF.length) * 100}%`,
-            background:'linear-gradient(to right,#3BBDAF,#6B6EF5)', borderRadius:2 }}/>
-        </div>
-      </div>
+            {/* §26 Translation Preview */}
+            <div style={{ border:'1px solid #1E3035', borderRadius:7, overflow:'hidden' }}>
+              <button onPointerDown={e=>e.stopPropagation()} onClick={()=>setTransOpen(o=>!o)}
+                style={{ width:'100%', display:'flex', alignItems:'center', gap:6,
+                  padding:'6px 9px', background:'#101A1E', border:'none', cursor:'pointer' }}>
+                <span style={{ fontSize:9, fontWeight:800, color:'#5FA8A0', letterSpacing:'0.04em' }}>
+                  {s.transPreview}
+                </span>
+                <span style={{ marginLeft:'auto', fontSize:9, color:'#3A5055' }}>{transOpen ? '▾' : '▸'}</span>
+              </button>
+              <div style={{ padding:'0 9px 7px', fontSize:9.5, color:'#7FA8A2', lineHeight:1.5 }}>
+                {s.transSummary}
+                {transOpen && (
+                  <pre style={{ margin:'6px 0 0', padding:'7px 8px', background:'#0C1214',
+                    border:'1px solid #16242A', borderRadius:5, fontSize:8.5, color:'#5A7A80',
+                    whiteSpace:'pre-wrap', fontFamily:"'JetBrains Mono',monospace" }}>
+{`direction: warm restrained city-pop
+mood: nostalgic, bittersweet
+energy: 0.55  texture: warm analog
+keep: original melody
+avoid: heavy EDM drops`}
+                  </pre>
+                )}
+                {transOpen && (
+                  <div style={{ fontSize:8.5, color:'#3A5055', marginTop:4 }}>{s.transParams}</div>
+                )}
+              </div>
+            </div>
 
-      {/* Play controls */}
-      <div style={{ padding:'12px 14px', display:'flex', alignItems:'center', gap:10 }}>
-        {/* Play/pause button */}
-        <button
-          onClick={e=>{ e.stopPropagation(); setPlaying(p=>!p) }}
-          style={{
-            width:40, height:40, borderRadius:12, flexShrink:0,
-            background:'linear-gradient(135deg,#3BBDAF28,#6B6EF518)',
-            border:'1px solid #3BBDAF35',
-            display:'flex', alignItems:'center', justifyContent:'center',
-            cursor:'pointer', transition:'all 0.15s',
-          }}
-          onMouseEnter={e=>{ e.currentTarget.style.background='linear-gradient(135deg,#3BBDAF40,#6B6EF530)' }}
-          onMouseLeave={e=>{ e.currentTarget.style.background='linear-gradient(135deg,#3BBDAF28,#6B6EF518)' }}
-        >
-          {playing
-            ? <svg width="14" height="14" viewBox="0 0 24 24" fill="#3BBDAF"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
-            : <svg width="14" height="14" viewBox="0 0 24 24" fill="#3BBDAF"><path d="M5 3l14 9-14 9V3z"/></svg>
-          }
-        </button>
-
-        {/* Metadata pills */}
-        <div style={{ flex:1, display:'flex', gap:5, flexWrap:'wrap' }}>
-          <Tag label={s.resultFormat}/>
-          <Tag label="都市流行 · 电影感"/>
-        </div>
-      </div>
-
-      {/* Separator */}
-      <div style={{ height:1, background:'#152025', margin:'0 14px' }}/>
-
-      {/* Export actions */}
-      <div style={{ padding:'10px 14px 14px', display:'flex', gap:6 }}>
-        <button onClick={e=>{ e.stopPropagation(); onExport() }}
-          style={{
-            flex:1.2, padding:'8px 0',
-            background:'linear-gradient(135deg,#3BBDAF25,#3BBDAF15)',
-            border:'1px solid #3BBDAF35', borderRadius:8,
-            color:'#3BBDAF', fontSize:11, fontWeight:700,
-            cursor:'pointer', fontFamily:"'Inter',sans-serif",
-            display:'flex', alignItems:'center', justifyContent:'center', gap:5,
-            transition:'all 0.12s',
-          }}
-          onMouseEnter={e=>{ e.currentTarget.style.background='linear-gradient(135deg,#3BBDAF35,#3BBDAF25)' }}
-          onMouseLeave={e=>{ e.currentTarget.style.background='linear-gradient(135deg,#3BBDAF25,#3BBDAF15)' }}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-          {s.resultDownload}
-        </button>
-        <button onClick={e=>e.stopPropagation()}
-          style={{
-            flex:1, padding:'8px 0',
-            background:'#141413', border:'1px solid #1E3035', borderRadius:8,
-            color:'#4A6A70', fontSize:11, fontWeight:600,
-            cursor:'pointer', fontFamily:"'Inter',sans-serif",
-            display:'flex', alignItems:'center', justifyContent:'center', gap:5,
-            transition:'all 0.12s',
-          }}
-          onMouseEnter={e=>{ e.currentTarget.style.color='#8ABCC2' }}
-          onMouseLeave={e=>{ e.currentTarget.style.color='#4A6A70' }}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/></svg>
-          {s.share}
-        </button>
+            {/* §27 Output Compatibility */}
+            <div style={{ fontSize:8.5, fontWeight:800, color:'#4A6A70', textTransform:'uppercase',
+              letterSpacing:'0.06em' }}>{s.readyFor}</div>
+            <div style={{ display:'flex', gap:5 }}>
+              <SDBtn label={s.readyAI} onClick={()=>{}} accent/>
+              <SDBtn label={s.readyProd} onClick={onExport}/>
+              <SDBtn label={s.readyCollab} onClick={onExport}/>
+            </div>
+          </>
+        )}
       </div>
     </div>
+  )
+}
+
+function SDBtn({ label, onClick, accent }: { label:string; onClick:()=>void; accent?:boolean }) {
+  return (
+    <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); onClick() }}
+      style={{
+        flex:1, padding:'7px 0',
+        background: accent ? '#141413' : '#141413',
+        border: accent ? '1px solid #F5A52345' : '1px solid #1E3035', borderRadius:7,
+        color: accent ? '#F0B45A' : '#5FA8A0', fontSize:10.5, fontWeight:600,
+        cursor:'pointer', fontFamily:"'Inter',sans-serif", transition:'all 0.12s',
+      }}
+      onMouseEnter={e=>{ e.currentTarget.style.borderColor = accent ? '#F5A52380' : '#2E5058'; e.currentTarget.style.color = accent ? '#FFD08A' : '#8ACCC4' }}
+      onMouseLeave={e=>{ e.currentTarget.style.borderColor = accent ? '#F5A52345' : '#1E3035'; e.currentTarget.style.color = accent ? '#F0B45A' : '#5FA8A0' }}
+    >{label}</button>
   )
 }
 
@@ -1323,5 +2014,291 @@ function Tag({ label }: { label: string }) {
       background:'#152025', border:'1px solid #1C3035',
       color:'#3A5A60', fontWeight:500,
     }}>{label}</span>
+  )
+}
+
+// ── 音频创作夹：Cover / Remix / Mashup ──
+
+function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDivergeFrame }: {
+  node: CanvasNode; nodes: CanvasNode[]; wires: Wire[]; langS: ReturnType<typeof useLang>
+  onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
+  onDivergeFrame: (frameId: string) => void
+}) {
+  const connectedLyrics = wires
+    .filter(w => w.toNodeId === node.id || w.fromNodeId === node.id)
+    .map(w => {
+      const otherId = w.toNodeId === node.id ? w.fromNodeId : w.toNodeId
+      return nodes.find(n => n.id === otherId && n.type === 'lyrics' && n.visible)
+    })
+    .filter(Boolean) as CanvasNode[]
+  const wOf = (m: CanvasNode) => Number(m.data.weight ?? 35)
+  const mats = nodes.filter(n =>
+    ['image','audio','text'].includes(n.type) && n.visible &&
+    n.x + n.w/2 > node.x && n.x + n.w/2 < node.x + FRAME_CANVAS_W &&
+    n.y + n.h/2 > node.y && n.y + n.h/2 < node.y + node.h)
+  const d = node.data
+  const generating = !!d.generating
+  const set = (patch: Record<string, unknown>) => onUpdateNodeData(node.id, patch)
+  const matIcon = (m: CanvasNode) => m.type === 'image' ? '🖼' : m.type === 'text' ? 'T' : (m.data.isRef ? '🔗' : '🎤')
+  const matName = (m: CanvasNode) => {
+    if (m.type === 'text') return String(m.data.title ?? '') || s.hdrText
+    const raw = String(m.data.label ?? m.data.name ?? '')
+    if (raw === '__HUM__') return s.addHumClip
+    if (raw === '__REF__') return s.addRefAudio
+    if (raw === '__HUM__' || raw === '__REF__' || raw.startsWith('__')) return raw.replace(/__/g, '')
+    return raw || s.nodeAudio
+  }
+  const matColor = (m: CanvasNode) => nodeThemeColor(m)
+  // 场本地坐标：扣除黑板头部 + 卡片边框 1px
+  const mrect = (m: CanvasNode) => {
+    const frameHasLyricsM = wires.some(w => (w.toNodeId === node.id || w.fromNodeId === node.id) && nodes.some(n => n.id === (w.toNodeId === node.id ? w.fromNodeId : w.toNodeId) && n.type === 'lyrics' && n.visible))
+    const dispX = Math.min(m.x, node.x + FRAME_CANVAS_W - m.w - 6)
+    const x = dispX - node.x - 1, y = m.y - node.y - FRAME_HEADER_H - (frameHasLyricsM ? FRAME_LYRICS_BAR_H : 0) - 1
+    return { x, y, w: m.w, h: m.h, cx: x + m.w/2, cy: y + m.h/2 }
+  }
+
+  // 清晰度（比重分布熵）
+  const ws = mats.map(wOf)
+  const total = ws.reduce((a,b)=>a+b,0)
+  let clarity = 0
+  if (ws.length > 1 && total > 0) {
+    const H = -ws.reduce((acc,w)=>{ const p=w/total; return acc + (p>0 ? p*Math.log(p) : 0) },0)
+    clarity = 1 - H/Math.log(ws.length)
+  }
+  const clCfg = clarity < 0.35 ? { c:'#7A7A78', t:s.amb0 }
+    : clarity < 0.62 ? { c:'#F5C87A', t:s.amb1 } : { c:'#5EC96E', t:s.amb2 }
+  const CIRC = 2 * Math.PI * 9
+  const autoPrompt = composeFramePrompt(s, node, mats)
+  const prompt = d.promptDirty ? String(d.prompt ?? '') : autoPrompt
+
+  return (
+    <div style={{ position:'relative', width:'100%', height:'100%', display:'flex', flexDirection:'column', overflow:'hidden', borderRadius:14 }}>
+      {/* Header — 上层遮盖 */}
+      <div data-frame-header={node.id} style={{ position:'relative', zIndex:10, flexShrink:0, height:FRAME_HEADER_H, boxSizing:'border-box', background:'#131312', borderBottom:'1px solid #26262A',
+        display:'flex', alignItems:'center', gap:9, padding:'10px 14px' }}>
+        {(() => {
+          const n = mats.length
+          const cfg = n <= 4 ? { cols:2, cell:6, gap:4 } : n <= 9 ? { cols:3, cell:5, gap:3 } : { cols:4, cell:4, gap:2.5 }
+          const show = mats.slice(0,16)
+          return (
+            <div style={{ width:34, height:29, borderRadius:8, flexShrink:0,
+              background:'linear-gradient(135deg,#6B6EF530,#3BBDAF20)', border:'1px solid #6B6EF555',
+              display:'grid', gridTemplateColumns:`repeat(${cfg.cols},${cfg.cell}px)`, gridAutoRows:`${cfg.cell}px`, gap:cfg.gap, placeContent:'center' }}>
+              {show.length ? show.map(m => (
+                <span key={m.id} style={{ borderRadius:1.5, background:matColor(m) }} />
+              )) : [0,1,2,3].map(i => (
+                <span key={i} style={{ width:6, height:6, borderRadius:2, background: i===0 ? '#6B6EF5' : '#2A2A34', opacity: i===0 ? 0.9 : 0.6 }} />
+              ))}
+            </div>
+          )
+        })()}
+        <div style={{ minWidth:0, flex:1 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:6, minWidth:0 }}>
+            <span style={{ fontSize:9, fontWeight:800, letterSpacing:'0.08em', textTransform:'uppercase', color:'#8A8AFF', flexShrink:0 }}>{s.frameTitle}</span>
+            <input value={String(d.name ?? '')} placeholder={s.fieldPh}
+              onClick={e=>e.stopPropagation()} onPointerDown={e=>{ e.stopPropagation(); (e.target as HTMLElement).focus() }}
+              onChange={e=>set({ name: e.target.value })}
+              style={{ width:140, flexShrink:0, background:'transparent', border:'none', outline:'none',
+                color:'#ECEBF5', fontSize:11.5, fontWeight:800, padding:'1px 4px',
+                fontStyle: d.name ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis' }}/>
+          </div>
+          <div style={{ fontSize:8.5, color:'#69677A', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {mats.length ? mats.map(m=>matName(m)).join(' + ') : s.frameEmptyHint}
+          </div>
+        </div>
+        <span style={{ fontSize:8.5, color:'#6B6EF5', fontWeight:800, fontFamily:"'JetBrains Mono',monospace", flexShrink:0, marginLeft:8 }}>
+          {mats.length} {s.inFrameTag}
+        </span>
+      </div>
+      {connectedLyrics.length > 0 && (
+        <div style={{ position:'relative', zIndex:10, flexShrink:0, height:FRAME_LYRICS_BAR_H, boxSizing:'border-box', background:'#1A1218', borderBottom:'1px solid #2E1E26', padding:'6px 14px', display:'flex', alignItems:'center', gap:7 }}>
+          <span style={{ fontSize:8, fontWeight:700, color:'#E56B8A', background:'#E56B8A18', border:'1px solid #E56B8A30', borderRadius:10, padding:'2px 6px', flexShrink:0, display:'inline-flex', alignItems:'center', gap:4 }}>
+            <span style={{ fontSize:9 }}>♪</span> 已连接歌词
+          </span>
+          <span style={{ flex:1, minWidth:0, fontSize:9.5, color:'#D8B0BE', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {connectedLyrics.map(n => String((n.data as any).title ?? '未命名歌词')).join(' · ')}
+          </span>
+          <span style={{ fontSize:8, color:'#8A5A6E', flexShrink:0 }}>{connectedLyrics.length} 首</span>
+        </div>
+      )}
+
+      <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:`${FRAME_CANVAS_W}px 1fr` }}>
+        <div data-frame-canvas={node.id} style={{ position:'relative', zIndex:1, overflow:'hidden', background:'#141413', borderRight:'1px solid #292928', contain:'paint', clipPath:'inset(0)' }}>
+          <svg aria-hidden="true" width="100%" height="100%" preserveAspectRatio="none"
+            style={{ position:'absolute', inset:0, opacity:0.045, pointerEvents:'none', mixBlendMode:'soft-light' }}>
+            <filter id={`board-noise-${node.id}`} x="0" y="0" width="100%" height="100%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="3" seed="17" stitchTiles="stitch"/>
+            </filter>
+            <rect width="100%" height="100%" filter={`url(#board-noise-${node.id})`} opacity="0.7"/>
+          </svg>
+          <div style={{ position:'absolute', inset:0, opacity:0.18,
+            backgroundImage:'radial-gradient(#3A3A38 0.65px, transparent 0.65px)', backgroundSize:'18px 18px' }}/>
+          {mats.length === 0 && (
+            <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center',
+              color:'#4A4A48', fontSize:11, letterSpacing:'0.02em' }}>
+              {s.frameEmptyHint}
+            </div>
+          )}
+          {mats.length > 1 && (
+            <svg width="100%" height="100%" style={{ position:'absolute', inset:0, pointerEvents:'none' }}>
+              <defs>
+                {mats.flatMap((a, i) => mats.slice(i+1).map(b => {
+                  const ca = matColor(a), cb = matColor(b)
+                  return <linearGradient key={`g-${a.id}-${b.id}`} id={`grad-${a.id}-${b.id}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor={ca} stopOpacity="0.58"/>
+                    <stop offset="100%" stopColor={cb} stopOpacity="0.58"/>
+                  </linearGradient>
+                }))}
+              </defs>
+              {mats.flatMap((a, i) => mats.slice(i+1).map(b => {
+                const ra = mrect(a), rb = mrect(b)
+                const avgW = (wOf(a) + wOf(b)) / 2
+                return <line key={`${a.id}-${b.id}`} x1={ra.cx} y1={ra.cy} x2={rb.cx} y2={rb.cy}
+                  stroke={`url(#grad-${a.id}-${b.id})`} strokeWidth="1.1" strokeLinecap="round" strokeDasharray="4 6" opacity={0.34 + avgW/420}/>
+              }))}
+            </svg>
+          )}
+        </div>
+
+        <div style={{ position:'relative', zIndex:10, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden',
+          background:'linear-gradient(180deg,#121211,#10100F)' }}>
+          <div className="thin-scroll explore-scroll" style={{ flex:1, minHeight:0, overflowY:'auto', padding:'13px 13px 12px', display:'flex', flexDirection:'column', gap:12, overscrollBehavior:'contain' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontSize:10.5, fontWeight:800, color:'#A0A09C' }}>{s.panelTitle}</span>
+              <span style={{ fontSize:8.5, color:'#4A4A48' }}>{s.weightHint}</span>
+            </div>
+
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              <div style={{ fontSize:9, color:'#62625E', fontWeight:700 }}>{s.weightL}</div>
+              {mats.map(m => (
+                <div
+                  key={m.id}
+                  data-guide-target={`weight-${m.id}`}
+                  onPointerDown={e=>{
+                    e.stopPropagation()
+                    const el = e.currentTarget as HTMLElement
+                    const rect = el.getBoundingClientRect()
+                    const toWeight = (cx:number) => Math.max(5, Math.min(100, Math.round(((cx - rect.left) / rect.width) * 100)))
+                    onUpdateNodeData(m.id, { weight: toWeight(e.clientX) })
+                    const onMove = (ev: PointerEvent) => onUpdateNodeData(m.id, { weight: toWeight(ev.clientX) })
+                    const onUp = () => {
+                      window.removeEventListener('pointermove', onMove)
+                      window.removeEventListener('pointerup', onUp)
+                    }
+                    window.addEventListener('pointermove', onMove)
+                    window.addEventListener('pointerup', onUp)
+                    try { el.setPointerCapture((e as unknown as { pointerId:number }).pointerId) } catch {}
+                  }}
+                  style={{ position:'relative', height:25, borderRadius:7, overflow:'hidden',
+                  border:`1px solid ${matColor(m)}30`, background:'#171716', cursor:'ew-resize' }}>
+                  <div style={{ position:'absolute', inset:'0 auto 0 0', width:`${wOf(m)}%`, background:matColor(m)+'20', transition:'none' }}/>
+                  <div style={{ position:'relative', height:'100%', padding:'0 8px', display:'flex', alignItems:'center', gap:6, pointerEvents:'none' }}>
+                    <span style={{ fontSize:10 }}>{matIcon(m)}</span>
+                    <span style={{ flex:1, minWidth:0, fontSize:9.5, fontWeight:650, color:'#A0A09C', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{matName(m)}</span>
+                    <span style={{ color:matColor(m), fontSize:9, fontWeight:800, fontFamily:"'JetBrains Mono',monospace" }}>{wOf(m)}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <SegRow label={s.modeL}>
+              <button onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ mode:'inst' })} style={segBtn(d.mode==='inst','#3BBDAF')}>{s.modeInst}</button>
+              <button onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ mode:'song' })} style={segBtn(d.mode!=='inst','#3BBDAF')}>{s.modeSong}</button>
+            </SegRow>
+
+            {d.mode !== 'inst' && (
+              <SegRow label={s.vocalL}>
+                <button onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ vocal:'male' })} style={segBtn(d.vocal==='male','#F5A523')}>{s.male}</button>
+                <button onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ vocal:'female' })} style={segBtn(d.vocal!=='male','#F5A523')}>{s.female}</button>
+              </SegRow>
+            )}
+
+            <SegRow label={s.timeSignature}>
+              <button onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ timeSig: '' })}
+                style={{ ...segBtn(!d.timeSig || d.timeSig==='' ,'#9B7EFF'), flex:1, padding:'5px 0' }}>不指定</button>
+              {['4/4','3/4','6/8','5/4','7/8'].map(sig => (
+                <button key={sig} onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ timeSig:sig })}
+                  style={{ ...segBtn(d.timeSig===sig,'#9B7EFF'), flex:1, padding:'5px 0' }}>{sig}</button>
+              ))}
+            </SegRow>
+
+            <div style={{ display:'flex', flexDirection:'column' }}>
+              <div style={{ fontSize:9, color:'#A65C50', fontWeight:700, marginBottom:5 }}>⊘ {s.negativeL}</div>
+              <textarea value={String(d.negative ?? '')} placeholder={s.negativePh}
+                onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()}
+                onChange={e=>set({ negative:e.target.value })}
+                style={{ height:72, width:'100%', resize:'none', padding:'7px 8px', borderRadius:7,
+                  background:'#140F0E', border:'1px solid #3A2422', color:'#9A6A64', fontSize:9,
+                  lineHeight:1.45, outline:'none', fontFamily:"'Inter',sans-serif" }}/>
+            </div>
+          </div>
+          <div style={{ flexShrink:0, padding:'0 13px 14px', background:'linear-gradient(180deg,#121211,#10100F)', borderTop:'1px solid #1E1E1E' }}>
+            <button data-guide-target={`frame-generate-${node.id}`} disabled={generating || mats.length === 0}
+              onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); onDivergeFrame(node.id) }}
+              style={{ width:'100%', minHeight:38, border:0, borderRadius:8, cursor:generating || mats.length===0 ? 'default' : 'pointer',
+                color:'#F4F4FF', fontSize:11.5, fontWeight:800,
+                background:generating || mats.length===0 ? '#28282A' : 'linear-gradient(100deg,#686CF4,#9877F4)',
+                boxShadow:generating ? 'none' : '0 8px 24px rgba(107,110,245,.2)', opacity:mats.length===0 ? .5 : 1 }}>
+              {generating ? <span>✦ {s.divergingB} <i className="ai-dot-1">·</i><i className="ai-dot-2">·</i><i className="ai-dot-3">·</i></span> : `✦ ${s.divergeBtn}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function segBtn(active: boolean, color: string): React.CSSProperties {
+  return {
+    flex:1, padding:'5px 0', borderRadius:6, cursor:'pointer',
+    background: active ? color+'20' : '#1A1A19',
+    border:`1px solid ${active ? color+'55' : '#2A2A28'}`,
+    color: active ? color : '#5A5A56',
+    fontSize:10, fontWeight: active ? 700 : 500,
+  }
+}
+
+function SegRow({ label, children }: { label:string; children:React.ReactNode }) {
+  return (
+    <div>
+      <div style={{ fontSize:9, color:'#5A5A56', fontWeight:600, marginBottom:4 }}>{label}</div>
+      <div style={{ display:'flex', gap:3 }}>{children}</div>
+    </div>
+  )
+}
+
+function composeFramePrompt(s: ReturnType<typeof useLang>, frame: CanvasNode, mats: CanvasNode[]): string {
+  const sorted = [...mats].sort((a,b)=>(Number(b.data.weight??0))-(Number(a.data.weight??0)))
+  const parts = sorted.map(m => `${String(m.data.name ?? m.data.label ?? '').slice(0,8)} ${Number(m.data.weight??0)}%`)
+  const vocal = frame.data.mode === 'inst' ? s.modeInst : `${s.modeSong} · ${frame.data.vocal==='male'?s.male:s.female}`
+  const ref = mats.find(m=>m.data.isRef)
+  const an = ref?.data.analysis as { bpm:number; key:string; style:string } | undefined
+  const timeSigRaw = String(frame.data.timeSig ?? '').trim()
+  const timeSigPart = timeSigRaw ? `${timeSigRaw} ${s.timeSignature}` : `不指定${s.timeSignature}`
+  const L = [
+    `${vocal}，${timeSigPart}${an ? `，${an.bpm} BPM · ${an.key}` : ''}。`,
+    an ? `${s.styleL}: ${an.style}。` : '',
+    sorted[0] ? `${s.weightL}: ${parts.join(' · ')}。` : '',
+    `${s.tensionText}。`,
+  ]
+  return L.filter(Boolean).join('')
+}
+
+// ── Prompt 卡 ──
+
+function PromptContent({ node }: { node: CanvasNode }) {
+  const s = useLang()
+  return (
+    <div style={{ width:'100%', height:'100%', background:'#101014', borderRadius:10,
+      border:'1px solid #26263A', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <div style={{ height:32, flexShrink:0, display:'flex', alignItems:'center', gap:7,
+        padding:'0 11px', borderBottom:'1px solid #1E1E2C' }}>
+        <span style={{ fontSize:9, fontWeight:800, color:'#8A8AFF', letterSpacing:'0.06em',
+          textTransform:'uppercase' }}>✦ {s.usedPromptL}</span>
+      </div>
+      <pre style={{ flex:1, minHeight:0, margin:0, padding:'10px 12px', overflowY:'auto',
+        fontSize:10, lineHeight:1.7, color:'#9A9AC0', whiteSpace:'pre-wrap',
+        fontFamily:"'JetBrains Mono',monospace" }} className="thin-scroll">{String(node.data.text ?? '')}</pre>
+    </div>
   )
 }
