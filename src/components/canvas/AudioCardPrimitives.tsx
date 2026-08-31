@@ -1,13 +1,17 @@
 import type { WorkSource } from './model'
+import { useLang } from '../../App'
+import { localizeBuiltinText } from '../../contentI18n'
 
 export function WorkSourceRows({sources}:{sources:WorkSource[]}) {
+  const s=useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const isTwoByTwo = sources.length >= 4
   return (
     <div style={{display:'grid',gridTemplateColumns:isTwoByTwo?'repeat(2,minmax(0,1fr))':'1fr',gap:4}}>
       {sources.slice(0,4).map(source => (
         <div key={source.id} style={{display:'flex',alignItems:'center',justifyContent:'flex-start',gap:5,minWidth:0,fontSize:isTwoByTwo?8.5:9.5,color:source.color}}>
           <i style={{width:5,height:5,borderRadius:'50%',background:source.color,boxShadow:`0 0 7px ${source.color}`,flexShrink:0}}/>
-          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:source.color}}>{source.name}</span>
+          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:source.color}}>{localizeBuiltinText(source.name,lang)}</span>
         </div>
       ))}
     </div>
@@ -35,16 +39,17 @@ export function AudioCardHeader({title,badge,primary,badgeColor,onOpen,onRemove,
   title:string; badge:string; primary:string; badgeColor:string
   onOpen?:()=>void; onRemove?:()=>void; removeLabel:string; hasLyrics?:boolean
 }) {
+  const s=useLang()
   return <div data-card-part="header" style={{height:38,flexShrink:0,display:'flex',alignItems:'center',gap:7,
     padding:'0 10px',borderTop:`2px solid ${primary}`,borderBottom:'1px solid #ffffff0D',background:'rgba(20,20,19,.72)'}}>
     <strong onClick={e=>{e.stopPropagation();onOpen?.()}}
       style={{flex:1,minWidth:0,fontSize:11.5,fontWeight:700,color:'#F1F0EE',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'pointer'}}>{title}</strong>
     {hasLyrics && (
-      <span title="含歌词" style={{
+      <span title={s.langToggle==='EN'?'含歌词':'Includes lyrics'} style={{
         fontSize:9, fontWeight:600, flexShrink:0,
         color:'#E56B8A', background:'#E56B8A12', border:'1px solid #E56B8A28',
         borderRadius:12, padding:'2px 7px',
-      }}>词</span>
+      }}>{s.langToggle==='EN'?'词':'LYR'}</span>
     )}
     <span style={{fontSize:8.5,fontWeight:800,color:badgeColor,background:badgeColor+'12',border:`1px solid ${badgeColor}38`,
       borderRadius:12,padding:'2px 7px',flexShrink:0}}>{badge}</span>
@@ -60,11 +65,17 @@ export function AudioCardMood({label,color}:{label:string;color:string}) {
   </div>
 }
 
-export function AudioCardPlayback({playing,progress,duration,primary,secondary,onToggle}:{
-  playing:boolean;progress:number;duration:string;primary:string;secondary?:string;onToggle:()=>void
+export function AudioCardPlayback({playing,progress,duration,primary,secondary,onToggle,onSeek}:{
+  playing:boolean;progress:number;duration:string;primary:string;secondary?:string;onToggle:()=>void;onSeek?:(progress:number)=>void
 }) {
+  const s=useLang()
   const fill = secondary ? `linear-gradient(90deg,${primary},${secondary})` : primary
-  return <div data-card-part="playback" style={{display:'flex',alignItems:'center',gap:7,marginTop:'auto'}}>
+  const seekFromPointer=(event:React.PointerEvent<HTMLDivElement>)=>{
+    if(!onSeek)return
+    const rect=event.currentTarget.getBoundingClientRect()
+    onSeek((event.clientX-rect.left)/rect.width*100)
+  }
+  return <div data-card-part="playback" data-guide-audio-control="1" style={{display:'flex',alignItems:'center',gap:7,marginTop:'auto'}}>
     <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onToggle()}}
       style={{width:30,height:30,borderRadius:8,flexShrink:0,cursor:'pointer',background:primary+'14',border:`1px solid ${primary}40`,
         color:primary,display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -73,9 +84,15 @@ export function AudioCardPlayback({playing,progress,duration,primary,secondary,o
         : <svg width="10" height="10" viewBox="0 0 24 24" fill={primary}><path d="M5 3l14 9-14 9V3z"/></svg>}
     </button>
     <span style={{flexShrink:0,fontSize:9.5,color:'#66716F',fontFamily:"'JetBrains Mono',monospace"}}>{playbackTimeLabel(progress,duration)}</span>
-    <div style={{flex:1,minWidth:24,height:3,borderRadius:3,background:'rgba(255,255,255,.085)',boxShadow:'inset 0 1px 2px rgba(0,0,0,.5)',overflow:'hidden',pointerEvents:'none'}}>
+    <div role={onSeek?'slider':undefined} tabIndex={onSeek?0:undefined} aria-label={onSeek?(s.langToggle==='EN'?'音频进度':'Audio progress'):undefined} aria-valuemin={onSeek?0:undefined} aria-valuemax={onSeek?100:undefined} aria-valuenow={onSeek?Math.round(progress):undefined}
+      onPointerDown={onSeek?event=>{event.stopPropagation();event.currentTarget.setPointerCapture(event.pointerId);seekFromPointer(event)}:undefined}
+      onPointerMove={onSeek?event=>{if(event.currentTarget.hasPointerCapture(event.pointerId))seekFromPointer(event)}:undefined}
+      onPointerUp={onSeek?event=>{event.stopPropagation();if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId)}:undefined}
+      onKeyDown={onSeek?event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();event.stopPropagation();onSeek(progress+(event.key==='ArrowRight'?5:-5))}}:undefined}
+      style={{flex:1,minWidth:24,height:7,padding:'2px 0',borderRadius:3,cursor:onSeek?'pointer':'default'}}>
+      <div style={{height:3,borderRadius:3,background:'rgba(255,255,255,.085)',boxShadow:'inset 0 1px 2px rgba(0,0,0,.5)',overflow:'hidden'}}>
       <div style={{width:`${progress}%`,height:'100%',borderRadius:3,background:fill,boxShadow:`0 0 7px ${(secondary??primary)}80`,transition:'width .1s linear'}}/>
+      </div>
     </div>
   </div>
 }
-

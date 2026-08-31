@@ -14,10 +14,13 @@ import ProjectGallery, { type GalleryBoard } from './components/ProjectGallery'
 import GuidedTour from './components/GuidedTour'
 import { useMuseFlowState } from './hooks/useMuseFlowState'
 import { createImportedNodes } from './importers/materialImport'
-import { hydrateProject, loadProject, releaseAssetUrls, saveProject, type ImportKind, type ProjectSnapshot } from './storage/projectStore'
+import { clearStoredWorkspace, hydrateProject, loadProject, releaseAssetUrls, saveProject, type ImportKind, type ProjectSnapshot } from './storage/projectStore'
 import { getProjectExportCounts, runProjectExport } from './projectExporters'
-import { buildGuidedExampleBoard, buildGuidedExampleNodes, ensureGuidedExampleBoard, GUIDED_EXAMPLE_ID, GUIDE_FRAME_ID, GUIDE_IMAGE_ID, GUIDE_REF_ID } from './guidedExample'
+import { buildGuidedExampleBoard, buildGuidedExampleNodes, buildGuidedIntentNode, buildGuidedLyricsNode, ensureGuidedExampleBoard, GUIDED_EXAMPLE_ID, GUIDE_FRAME_ID, GUIDE_IMAGE_ID, GUIDE_INTENT_ID, GUIDE_LYRICS_ID, GUIDE_REF_ID } from './guidedExample'
 import { placeNodeWithoutOverlap, placeNodesWithoutOverlap } from './utils/canvasPlacement'
+import { emitGuideEvent } from './guideEvents'
+import { GUIDED_DEMO_AUDIO, GUIDED_WORK_AUDIO, resolveGuidedAudio } from './guidedAudio'
+import { localizeBuiltinText } from './contentI18n'
 
 export const LangCtx = createContext<Lang>('zh')
 export const useLang = () => strings[useContext(LangCtx)]
@@ -29,32 +32,9 @@ const AUDIO_FOLDER_COMPACT_H = 480
 const AUDIO_FOLDER_EXPANDED_H = 560
 const AUDIO_FOLDER_LYRICS_EXTRA_H = 32
 const isAutoAnchorId = (id:string) => id.includes('-ghost-') || id.includes('-auto-edge-')
-const BOARD_LIBRARY_KEY = 'museflow-board-library-v1'
-const ACTIVE_BOARD_KEY = 'museflow-active-board-v1'
-const ACTIVE_BOARD_NAME_KEY = 'museflow-active-board-name-v1'
-
-function loadBoardLibrary():GalleryBoard[] {
-  try {
-    const value=localStorage.getItem(BOARD_LIBRARY_KEY)
-    if (!value) return ensureGuidedExampleBoard([])
-    const parsed=JSON.parse(value) as GalleryBoard[]
-    const boards=Array.isArray(parsed) ? parsed.filter(board=>board && typeof board.id==='string' && Array.isArray(board.nodes) && Array.isArray(board.wires)) : []
-    return ensureGuidedExampleBoard(boards)
-  } catch { return ensureGuidedExampleBoard([]) }
-}
-
 function upsertBoard(boards:GalleryBoard[], board:GalleryBoard) {
   const index=boards.findIndex(item=>item.id===board.id)
   return index<0 ? [board,...boards] : boards.map(item=>item.id===board.id?board:item)
-}
-
-function cleanBoardLibrary(boards:GalleryBoard[]) {
-  return boards.map(board=>({...board,nodes:board.nodes.map(node=>{
-    const data={...node.data}
-    if(typeof data.imageUrl==='string' && data.imageUrl.startsWith('blob:')) delete data.imageUrl
-    if(typeof data.audioUrl==='string' && data.audioUrl.startsWith('blob:')) delete data.audioUrl
-    return {...node,data,selected:false}
-  })}))
 }
 
 async function blobToDataUrl(blob:Blob) {
@@ -401,7 +381,7 @@ function buildInitialNodes(): CanvasNode[] {
       data: { label: '图片素材', name: '夜晚城市', imageUrl: CITY_IMG, keywords: IMG_KEYWORDS, weight: 40 } },
 
     { id: 'audio-hum', type: 'audio', x: 60, y: 300, w: 200, h: 100, visible: true, selected: false, inputs: [], outputs: [],
-      data: { label: '哼唱片段', duration: '0:08', isHum: true, weight: 55 } },
+      data: { label: '小样', duration: '0:08', isHum: true, weight: 55 } },
 
     { id: 'audio-ref', type: 'audio', x: 300, y: 90, w: 200, h: 156, visible: true, selected: false, inputs: [], outputs: [],
       data: { label: '参考音频', fileName: 'Reference_Track.mp3', duration: '3:42', isRef: true, weight: 35, analysis: REF_ANALYSIS } },
@@ -448,8 +428,8 @@ const WORK_SPEC_SETS = {
     { name:'脉冲重混版', color:'#7C5CFF', accent:'#26E6D4', mood:'流动 / 推进', style:'Electronic Remix', energy:82, ratio:42, duration:'3:18' },
     { name:'午夜俱乐部版', color:'#2ED3FF', accent:'#B84CFF', mood:'冷艳 / 开阔', style:'Club Rework', energy:76, ratio:58, duration:'4:02' },
   ],[
-    { name:'碎拍霓虹版', color:'#22D3A7', accent:'#7C5CFF', mood:'灵动 / 错位', style:'Future Garage Remix', energy:69, ratio:46, duration:'3:44' },
-    { name:'日落慢速版', color:'#FF7A59', accent:'#F4D35E', mood:'慢热 / 迷离', style:'Downtempo Remix', energy:52, ratio:63, duration:'4:16' },
+    { name:'爵士大乐队', color:'#FF7A59', accent:'#F4D35E', mood:'灵活 / 跳脱 / 迷离', style:'Jazz Bigband Remix', energy:52, ratio:63, duration:'2:47' },
+    { name:'Citypop！', color:'#22D3A7', accent:'#7C5CFF', mood:'灵动 / 错位', style:'Funky Citypop Remix', energy:69, ratio:46, duration:'1:42' },
   ],[
     { name:'电光超载版', color:'#A855F7', accent:'#22D3EE', mood:'强烈 / 未来', style:'Hyperpop Remix', energy:91, ratio:39, duration:'3:09' },
     { name:'月面深潜版', color:'#365CFF', accent:'#A78BFA', mood:'深邃 / 失重', style:'Ambient Techno Remix', energy:61, ratio:55, duration:'4:28' },
@@ -514,9 +494,9 @@ export default function App() {
   const [lastManualSavedAt,setLastManualSavedAt] = useState<number | null>(null)
   const [projectSaveState,setProjectSaveState] = useState<'idle'|'saving'|'saved'|'restored'|'error'>('idle')
   const [testMode,setTestMode] = useState(false)
-  const [activeBoardId,setActiveBoardId] = useState(()=>localStorage.getItem(ACTIVE_BOARD_KEY) ?? 'night-drive')
-  const [activeProjectName,setActiveProjectName] = useState(()=>localStorage.getItem(ACTIVE_BOARD_NAME_KEY) ?? strings.zh.projectName)
-  const [boards,setBoards] = useState<GalleryBoard[]>(loadBoardLibrary)
+  const [activeBoardId,setActiveBoardId] = useState(GUIDED_EXAMPLE_ID)
+  const [activeProjectName,setActiveProjectName] = useState(()=>buildGuidedExampleBoard().name)
+  const [boards,setBoards] = useState<GalleryBoard[]>(()=>[buildGuidedExampleBoard()])
   const [galleryMounted,setGalleryMounted] = useState(true)
   const [galleryClosing,setGalleryClosing] = useState(false)
   const [tutorialPromptOpen,setTutorialPromptOpen] = useState(true)
@@ -528,14 +508,9 @@ export default function App() {
 
   const s = strings[lang]
 
-  useEffect(() => {
-    try { localStorage.setItem(BOARD_LIBRARY_KEY,JSON.stringify(cleanBoardLibrary(boards))) } catch { /* local gallery remains available for this session */ }
-  },[boards])
-
-  useEffect(() => {
-    localStorage.setItem(ACTIVE_BOARD_KEY,activeBoardId)
-    localStorage.setItem(ACTIVE_BOARD_NAME_KEY,activeProjectName)
-  },[activeBoardId,activeProjectName])
+  useEffect(()=>{
+    document.documentElement.lang=lang==='zh'?'zh-CN':'en'
+  },[lang])
 
   const currentBoardSnapshot = useCallback(():GalleryBoard => {
     const metadata=boards.find(board=>board.id===activeBoardId)
@@ -565,7 +540,7 @@ export default function App() {
         thumbnailAspect:capture ? 16/9 : previousBoard?.thumbnailAspect,
       })
     })
-    // 将“夜晚驾驶灵感”的真实画布捕获逻辑复用于“午夜城市重构”：为示例画板按需生成同款 16/9 真实缩略图，而非回退 SVG
+    // 将“夜晚驾驶灵感”的真实画布捕获逻辑复用于“孤独霓虹”：为示例画板按需生成同款 16/9 真实缩略图，而非回退 SVG
     setBoards(previous=>{
       const exampleBoard=previous.find(board=>board.id===GUIDED_EXAMPLE_ID)
       if(!exampleBoard || exampleBoard.thumbnail) return previous
@@ -638,6 +613,21 @@ export default function App() {
     handleCloseGallery()
   },[boards.length,lang,currentBoardSnapshot,handleCloseGallery])
 
+  const handleDeleteBoard = useCallback((id:string) => {
+    const board=boards.find(item=>item.id===id)
+    if (!board || board.kind==='example') return
+    const remaining=boards.filter(item=>item.id!==id)
+    if (id===activeBoardId) {
+      const next=remaining.find(item=>item.kind!=='example') ?? remaining.find(item=>item.kind==='example') ?? buildGuidedExampleBoard()
+      setActiveBoardId(next.id)
+      setActiveProjectName(next.name)
+      void applyProjectSnapshot({version:1,savedAt:next.updatedAt,lang,nodes:next.nodes,wires:next.wires})
+      setLastManualSavedAt(null)
+      setProjectSaveState('idle')
+    }
+    setBoards(remaining)
+  },[boards,activeBoardId,applyProjectSnapshot,lang])
+
   const handleTutorialNeed = useCallback(async () => {
     setTutorialPromptOpen(false)
     await handleOpenBoard(GUIDED_EXAMPLE_ID)
@@ -692,10 +682,18 @@ export default function App() {
     let cancelled = false
     ;(async () => {
       try {
-        const [auto,manual] = await Promise.all([loadProject('autosave'),loadProject('manual')])
+        await clearStoredWorkspace()
         if (cancelled) return
-        if (auto) await applyProjectSnapshot(auto)
-        if (!cancelled) setLastManualSavedAt(manual?.savedAt ?? null)
+        localStorage.removeItem('museflow-board-library-v1')
+        localStorage.removeItem('museflow-active-board-v1')
+        localStorage.removeItem('museflow-active-board-name-v1')
+        localStorage.removeItem('museflow-midnight-guide-v2')
+        const example=buildGuidedExampleBoard()
+        setBoards([example])
+        setActiveBoardId(example.id)
+        setActiveProjectName(example.name)
+        await applyProjectSnapshot({version:1,savedAt:example.updatedAt,lang,nodes:example.nodes,wires:example.wires})
+        if (!cancelled) setLastManualSavedAt(null)
       } catch {
         if (!cancelled) setProjectSaveState('error')
       } finally {
@@ -767,7 +765,7 @@ export default function App() {
     const imported = await createImportedNodes(files,kind,point?.x ?? cx-100,point?.y ?? cy-80)
     if (!imported.length) return
     setNodes(prev=>{
-      const placed=placeNodesWithoutOverlap(imported,prev).map((node,index)=>({...node,selected:index===imported.length-1}))
+      const placed=placeNodesWithoutOverlap(imported,prev,{avoidFrames:!point}).map((node,index)=>({...node,selected:index===imported.length-1}))
       return [...prev.map(n=>({...n,selected:false})),...placed]
     })
   }, [viewport])
@@ -813,6 +811,7 @@ export default function App() {
     if (!n) return
     setNodes(prev => prev.map(x => ({ ...x, selected: x.id === id })))
     setDetailId(id)
+    emitGuideEvent({type:'detail-open',nodeId:id})
   }, [])
 
   const handleCloseDetail = useCallback(() => {
@@ -871,7 +870,11 @@ export default function App() {
   }, [])
 
   const updateNodeSize = useCallback((id: string, w: number, h: number) => {
-    setNodes(prev => prev.map(n => n.id === id ? { ...n, w: Math.max(280, w), h: Math.max(260, h) } : n))
+    setNodes(prev => prev.map(n => {
+      if (n.id !== id) return n
+      if (n.type === 'text') return { ...n, w:n.w, h:Math.max(100,h) }
+      return { ...n, w:Math.max(280,w), h:Math.max(260,h) }
+    }))
   }, [])
 
   const updateNodeData = useCallback((id: string, patch: Record<string, unknown>) => {
@@ -986,7 +989,10 @@ export default function App() {
       : ''
     const negLine = negative ? `\n排除/避免:${negative}。` : ''
     const copyVariant = Number(frame.data.copyVariant ?? 0)
-    const demoSpecs = DEMO_SPEC_SETS[copyVariant % DEMO_SPEC_SETS.length]
+    // 教学实例是一套有标准答案的交互原型：无论重复生成多少次，
+    // 都只返回同一组三张 Demo，方便后续绑定逐张制作的真实音频。
+    const isGuidedExample = activeBoardId===GUIDED_EXAMPLE_ID
+    const demoSpecs = isGuidedExample ? DEMO_SPEC_SETS[0] : DEMO_SPEC_SETS[copyVariant % DEMO_SPEC_SETS.length]
 
     setNodes(prev => prev.map(n => n.id === frameId ? { ...n, data: { ...n.data, generating: true } } : n))
     setTimeout(() => {
@@ -1015,6 +1021,7 @@ export default function App() {
           id: nid('demo'), lb: sp.lb, name: sp.name, color: sp.color,
           mood: sp.mood, style: sp.style, texture: sp.texture, rhythm: sp.rhythm,
           energy: sp.energy, duration: '0:30',
+          ...(isGuidedExample?GUIDED_DEMO_AUDIO[sp.name]:undefined),
           recipe,
           lyrics: lyricText || undefined,
           usedPrompt: [
@@ -1024,12 +1031,13 @@ export default function App() {
             partsLine,
           ].filter(Boolean).join('\n') + negLine + lyricLine,
         }))
-        return { ...n, data: { ...n.data, generating: false, demos, copyVariant:copyVariant + 1 } }
+        return { ...n, data: { ...n.data, generating: false, demos, copyVariant:isGuidedExample?0:copyVariant + 1 } }
       }))
     }, 1500)
-  }, [lang])
+  }, [activeBoardId,lang])
 
   const handleExtractDemo = useCallback((_frameId: string, demo: DemoItem, x: number, y: number) => {
+    const audio=demo.audioUrl?undefined:resolveGuidedAudio(demo.name)
     const card: CanvasNode = {
       id: demo.id,
       type: 'direction',
@@ -1041,7 +1049,7 @@ export default function App() {
       selected: true,
       inputs: [],
       outputs: [{ id:nid('demo-out'), label:'Direction', dataType:'direction', color:demo.color, yRel:70 }],
-      data: { ...demo, demo:true, label:demo.name, tags:[] },
+      data: { ...demo, ...(audio??{}), demo:true, label:demo.name, tags:[] },
     }
     setNodes(prev => [...prev.map(n => ({ ...n, selected:false })),placeNodeWithoutOverlap(card,prev)])
     setDetailId(demo.id)
@@ -1059,17 +1067,18 @@ export default function App() {
       if (inside(source) && inside(target)) return
     }
     const toSource = (n: CanvasNode) => {
-      const rawName = String(n.data.name ?? n.data.label ?? n.data.fileName ?? (n.data.isHum ? '哼唱片段' : n.id))
+      const rawName = String(n.data.name ?? n.data.label ?? n.data.fileName ?? (n.data.isHum ? '小样' : n.id))
       const isWork = n.type === 'work'
       const isDemo = n.type === 'direction' && !!(n.data as any).demo
       return {
       id:n.id,
-      name:rawName === '__HUM__' ? s.qRecordMelody : rawName === '__REF__' ? s.qAddReference : rawName,
+      name:rawName === '__HUM__' ? s.addHumClip : rawName === '__REF__' ? s.qAddReference : rawName,
       kind:isDemo ? 'demo' : isWork ? 'work' : n.data.isRef ? 'reference' : n.data.isHum ? 'hum' : n.type,
       color:String(n.data.color ?? (n.data.isRef ? '#4BA35A' : '#F5A523')),
       accent: isWork ? String((n.data as any).accent ?? '#42D9D0') : undefined,
       mode: isWork ? String((n.data as any).mode ?? 'remix') : undefined,
       duration:n.data.duration ? String(n.data.duration) : undefined,
+      audioUrl:typeof n.data.audioUrl==='string' ? n.data.audioUrl : undefined,
       fileName:n.data.fileName ? String(n.data.fileName) : undefined,
       mood:n.data.mood ? String(n.data.mood) : undefined,
       style:n.data.style ? String(n.data.style) : undefined,
@@ -1102,7 +1111,7 @@ export default function App() {
       visible:true, selected:true,
       inputs:[{ id: nid('lyin'), label: 'Lyrics', dataType: 'text', color: '#E56B8A', yRel: 44 }],
       outputs:[{ id:nid('folder-out'), label:'Full tracks', dataType:'audio', color:'#8A7CFF', yRel:64 }],
-      data:{ name:'Audio Studio', sources:[toSource(target),toSource(source)], mode:activeBoardId===GUIDED_EXAMPLE_ID?'cover':'remix', prompt:'', generating:false, works:[], weirdness:50, styleInfluence:50, audioInfluence:25, durationMode:'auto' },
+      data:{ name:'音频创作夹', sources:[toSource(target),toSource(source)], mode:activeBoardId===GUIDED_EXAMPLE_ID?'cover':'remix', prompt:'', generating:false, works:[], weirdness:50, styleInfluence:50, audioInfluence:25, durationMode:'auto' },
     }
     const removed = new Set([source.id,target.id])
     setNodes(prev => {
@@ -1112,7 +1121,7 @@ export default function App() {
     })
     setWires(prev => prev.filter(w => !removed.has(w.fromNodeId) && !removed.has(w.toNodeId)))
     setCompareIds(prev => prev.filter(id => !removed.has(id)))
-  }, [activeBoardId, s.qAddReference, s.qRecordMelody])
+  }, [activeBoardId, s.qAddReference, s.addHumClip])
 
   const handleGenerateAudioFolder = useCallback((folderId: string) => {
     const folder = nodesRef.current.find(n => n.id === folderId)
@@ -1123,34 +1132,40 @@ export default function App() {
     window.setTimeout(() => {
       setNodes(prev => prev.map(n => {
         if (n.id !== folderId) return n
-        const mode = String(n.data.mode ?? 'remix') as WorkItem['mode']
+        const requestedMode = String(n.data.mode ?? 'remix') as WorkItem['mode']
+        const isGuidedExample = activeBoardId===GUIDED_EXAMPLE_ID
+        const mode:WorkItem['mode'] = isGuidedExample?'remix':requestedMode
         const sources = (n.data.sources as WorkItem['sources'] | undefined) ?? []
         const prompt = String(n.data.prompt ?? '')
         const copyVariant = Number(n.data.copyVariant ?? 0)
+        // 教学实例固定为截图中的“碎拍霓虹版 / 日落慢速版”，普通画板仍轮换文案。
         const specSets = WORK_SPEC_SETS[mode]
-        const workSpecs = specSets[copyVariant % specSets.length]
+        const workSpecs = isGuidedExample?WORK_SPEC_SETS.remix[1]:specSets[copyVariant % specSets.length]
         const weirdness = Number(n.data.weirdness ?? 50)
         const styleInfluence = Number(n.data.styleInfluence ?? 50)
         const audioInfluence = Number(n.data.audioInfluence ?? 25)
         const durationMode = String(n.data.durationMode ?? 'auto')
         const influenceLine = `Weirdness ${weirdness}% · Style ${styleInfluence}% · Audio ${audioInfluence}% · Duration ${durationMode === 'auto' ? 'Auto' : 'Custom'}`
         const works: WorkItem[] = workSpecs.map((spec, index) => ({
-          id:nid('work'), ...spec, mode, sources,
-          sourceRatios:randomSourceRatios(sources.length),
+          id:nid('work'), ...spec, ...(isGuidedExample?GUIDED_WORK_AUDIO[spec.name]:undefined), mode, sources,
+          sourceRatios:isGuidedExample && sources.length===2 && 'ratio' in spec
+            ? [Number(spec.ratio),100-Number(spec.ratio)]
+            : randomSourceRatios(sources.length),
           lyrics: lyricText || undefined,
           usedPrompt:`${mode.toUpperCase()} · ${sources.map(s=>s.name).join(' + ')}${prompt ? `\n${prompt}` : ''}${lyricLine}\n${influenceLine}\nVariation ${index+1}`,
         }))
-        return { ...n, data:{ ...n.data, generating:false, works, copyVariant:copyVariant + 1 } }
+        return { ...n, data:{ ...n.data, generating:false, works, copyVariant:isGuidedExample?0:copyVariant + 1 } }
       }))
     }, 1700)
-  }, [getConnectedLyrics])
+  }, [activeBoardId,getConnectedLyrics])
 
   const handleExtractWork = useCallback((_folderId: string, work: WorkItem, x: number, y: number) => {
+    const audio=work.audioUrl?undefined:resolveGuidedAudio(work.name)
     const card: CanvasNode = {
       id:work.id, type:'work', x, y, w:WORK_CARD_W, h:WORK_CARD_H,
       visible:true, selected:true, inputs:[],
       outputs:[{ id:nid('work-out'), label:'Master audio', dataType:'audio', color:work.color, yRel:68 }],
-      data:{ ...work, label:work.name, fullTrack:true },
+      data:{ ...work, ...(audio??{}), label:work.name, fullTrack:true },
     }
     setNodes(prev => [...prev.map(n => ({ ...n, selected:false })),placeNodeWithoutOverlap(card,prev)])
     setDetailId(work.id)
@@ -1209,7 +1224,7 @@ export default function App() {
         h: source.kind === 'work' ? WORK_CARD_H : source.kind === 'demo' ? DEMO_CARD_H : 100,
         visible: true, selected: true,
         inputs: [], outputs: source.kind === 'work' ? [{ id: nid('work-out'), label:'Master audio', dataType:'audio', color:String(source.color), yRel:68 }] : source.kind === 'demo' ? [{ id: nid('demo-out'), label:'Direction', dataType:'direction', color:String(source.color), yRel:70 }] : [],
-        data: { name: source.name, label: source.name, color: source.color, accent: (source as any).accent, mode: (source as any).mode, mood: source.mood, style: source.style, texture: source.texture, rhythm: source.rhythm, fileName: source.fileName, duration: source.duration } as Record<string, unknown>,
+        data: { name: source.name, label: source.name, color: source.color, accent: (source as any).accent, mode: (source as any).mode, mood: source.mood, style: source.style, texture: source.texture, rhythm: source.rhythm, fileName: source.fileName, duration: source.duration, audioUrl:source.audioUrl } as Record<string, unknown>,
       }
     }
     if (restored) {
@@ -1306,9 +1321,23 @@ export default function App() {
       node = { id: nid('audio'), type: 'audio', x: cx + 30, y: cy - 110, w: 200, h: 156, visible: true, selected: false, inputs: [], outputs: [],
         data: { label: '__REF__', fileName: '未命名音频.wav', duration: '0:00', isRef: true, weight: 35, analysis: null } }
     } else if (type === 'text') {
-      node = { id: nid('text'), type: 'text', x: cx + 30, y: cy + 30, w: 200, h: 100, visible: true, selected: false, inputs: [], outputs: [],
-        data: { content: '', weight: 30 } }
+      if(activeBoardId===GUIDED_EXAMPLE_ID) {
+        if(nodesRef.current.some(item=>item.id===GUIDE_INTENT_ID))return
+        node=buildGuidedIntentNode()
+      } else {
+        node = { id: nid('text'), type: 'text', x: cx + 30, y: cy + 30, w: 200, h: 100, visible: true, selected: false, inputs: [], outputs: [],
+          data: { content: '', weight: 30 } }
+      }
+    } else if (type === 'note') {
+      node = { id:nid('note'), type:'note', x:cx-100, y:cy-60, w:200, h:118, visible:true, selected:false, inputs:[], outputs:[],
+        data:{ text:'' } }
     } else if (type === 'lyrics') {
+      if(activeBoardId===GUIDED_EXAMPLE_ID) {
+        if(nodesRef.current.some(item=>item.id===GUIDE_LYRICS_ID))return
+        const lyrics=buildGuidedLyricsNode()
+        const folder=nodesRef.current.find(item=>item.type==='audioFolder')
+        node=folder?{...lyrics,x:folder.x-lyrics.w-40,y:folder.y+20}:lyrics
+      } else {
       const defaultSections = [
         { id: nid('sec'), type: 'verse', label: '主歌', content: '' },
         { id: nid('sec'), type: 'chorus', label: '副歌', content: '' },
@@ -1319,11 +1348,12 @@ export default function App() {
         inputs: [],
         outputs: [{ id: nid('lyout'), label: 'Lyrics', dataType: 'text', color: '#E56B8A', yRel: 64 }],
         data: { title: '未命名歌词', sections: defaultSections } }
+      }
     } else if (type === 'audioFolder') {
       node = { id: nid('audio-folder'), type: 'audioFolder', x: cx - 270, y: cy - 80, w: 540, h: AUDIO_FOLDER_COMPACT_H, visible: true, selected: false,
         inputs: [{ id: nid('lyin'), label: 'Lyrics', dataType: 'text', color: '#E56B8A', yRel: 64 }],
         outputs: [{ id: nid('folder-out'), label: 'Full tracks', dataType: 'audio', color: '#8A7CFF', yRel: 64 }],
-        data: { name: 'Audio Studio', sources: [], mode: 'remix', prompt: '', generating: false, works: [] } }
+        data: { name: '音频创作夹', sources: [], mode: 'remix', prompt: '', generating: false, works: [] } }
     } else if (type === 'fuse') {
       node = { id: nid('fuse'), type: 'fuse', x: 900, y: 200, w: 226, h: 320, visible: true, selected: false,
         inputs: [
@@ -1333,21 +1363,8 @@ export default function App() {
         outputs: [{ id: nid('fout'), label: 'Hybrid', dataType: 'direction', color: '#F06090', yRel: py(0, 1, 320) }],
         data: { label: '__FUSE__', inheritsA: [], inheritsB: [] } }
     }
-    if (node) setNodes(prev => [...prev,placeNodeWithoutOverlap(node!,prev)])
-  }, [viewport])
-
-  // ── ⌘K ──
-  const handleCmdkSubmit = useCallback((text: string) => {
-    setNodes(prev => {
-      const question:CanvasNode={
-      id: nid('q'), type: 'question', x: 640, y: 760, w: 264, h: 150,
-      visible: true, selected: false, inputs: [], outputs: [],
-      data: { question: text, source: 'user', answered: null as string | null },
-      }
-      return [...prev,placeNodeWithoutOverlap(question,prev)]
-    })
-    setCmdkOpen(false)
-  }, [])
+    if (node) setNodes(prev => [...prev,placeNodeWithoutOverlap(node!,prev,{avoidFrames:true})])
+  }, [activeBoardId,viewport])
 
   // 自动边缘锚点只负责保存连线位置，不作为可见端口呈现。
   const handleAddPort = useCallback((nodeId: string, isInput: boolean, yRelAtMouse: number, colorHint?: string) => {
@@ -1403,7 +1420,7 @@ export default function App() {
 
   const handleCopyGuidedBoard = useCallback(() => {
     const id=`board-${Date.now().toString(36)}`
-    const name=lang==='zh'?'午夜城市重构 · 我的版本':'Midnight City Rework · My Version'
+    const name=lang==='zh'?'孤独霓虹 · 我的版本':'Lonely Neon · My Version'
     const board:GalleryBoard={id,name,nodes:nodesRef.current.map(node=>({...node,selected:false})),wires:[...wiresRef.current],updatedAt:Date.now(),kind:'user'}
     setBoards(previous=>[board,...upsertBoard(previous,currentBoardSnapshot())])
     setActiveBoardId(id)
@@ -1413,20 +1430,40 @@ export default function App() {
   },[currentBoardSnapshot,lang])
 
   const handleGuidePrepareStep = useCallback((step:number) => {
-    if(step===1) {
-      setNodes(previous=>previous.map(node=>node.id===GUIDE_IMAGE_ID?{...node,x:555,y:455}:node))
-      return
+    const ensureLyricsConnection=(targetId:string)=>{
+      const outputId='guide-lyrics-out'
+      const inputId=targetId===GUIDE_FRAME_ID?'guide-frame-lyrics-in':`guide-folder-lyrics-in-${targetId}`
+      setNodes(previous=>{
+        const withLyrics=previous.some(node=>node.id===GUIDE_LYRICS_ID)?previous:[...previous,buildGuidedLyricsNode()]
+        return withLyrics.map(node=>{
+          if(node.id===GUIDE_LYRICS_ID && !node.outputs.some(port=>port.id===outputId))return {...node,outputs:[...node.outputs,{id:outputId,label:'Lyrics',dataType:'text',color:'#E56B8A',yRel:64}]}
+          if(node.id===targetId && !node.inputs.some(port=>port.id===inputId))return {...node,inputs:[...node.inputs,{id:inputId,label:'Lyrics',dataType:'text',color:'#E56B8A',yRel:64}]}
+          return node
+        })
+      })
+      setWires(previous=>previous.some(wire=>(wire.fromNodeId===GUIDE_LYRICS_ID&&wire.toNodeId===targetId)||(wire.fromNodeId===targetId&&wire.toNodeId===GUIDE_LYRICS_ID))?previous:[...previous,{id:`guide-lyrics-wire-${targetId}`,fromNodeId:GUIDE_LYRICS_ID,fromPortId:outputId,toNodeId:targetId,toPortId:inputId,color:'#E56B8A',label:'Lyrics'}])
     }
     if(step===2) {
-      setNodes(previous=>previous.map(node=>node.id===GUIDE_IMAGE_ID?{...node,data:{...node.data,weight:60}}:node))
+      setNodes(previous=>{
+        const withIntent=previous.some(node=>node.id===GUIDE_INTENT_ID)?previous:[...previous.map(node=>({...node,selected:false})),buildGuidedIntentNode()]
+        return withIntent.map(node=>node.id===GUIDE_INTENT_ID?{...node,x:555,y:455}:node)
+      })
       return
     }
     if(step===3) {
+      setNodes(previous=>previous.map(node=>node.id===GUIDE_IMAGE_ID?{...node,x:790,y:390}:node))
+      return
+    }
+    if(step===4) {
+      setNodes(previous=>previous.map(node=>node.id===GUIDE_INTENT_ID?{...node,data:{...node.data,weight:60}}:node))
+      return
+    }
+    if(step===5) {
       const frame=nodesRef.current.find(node=>node.id===GUIDE_FRAME_ID)
       if(!((frame?.data.demos as unknown[]|undefined)?.length)) handleDivergeFrame(GUIDE_FRAME_ID)
       return
     }
-    if(step===4) {
+    if(step===6) {
       const extract=()=>{
         const frame=nodesRef.current.find(node=>node.id===GUIDE_FRAME_ID)
         const demo=((frame?.data.demos as DemoItem[]|undefined)??[])[0]
@@ -1439,7 +1476,12 @@ export default function App() {
       else {handleDivergeFrame(GUIDE_FRAME_ID);window.setTimeout(extract,1650)}
       return
     }
-    if(step===5) {
+    if(step===7) {
+      const demo=nodesRef.current.find(node=>node.type==='direction'&&node.data.demo)
+      if(demo)handleCanvasOpenDetail(demo.id)
+      return
+    }
+    if(step===8) {
       const create=()=>{
         const demo=nodesRef.current.find(node=>node.type==='direction'&&node.data.demo)
         const reference=nodesRef.current.find(node=>node.id===GUIDE_REF_ID)
@@ -1447,19 +1489,51 @@ export default function App() {
       }
       create()
       window.setTimeout(create,1750)
-      window.setTimeout(()=>{
+      const configure=()=>{
         const folder=nodesRef.current.find(node=>node.type==='audioFolder')
-        if(folder) updateNodeData(folder.id,{mode:'remix',weirdness:61,styleInfluence:41,prompt:'更强的夜间驾驶感，副歌加入更宽阔的空间层次。'})
-      },120)
+        if(!folder)return
+        updateNodeData(folder.id,{mode:'remix',weirdness:61,styleInfluence:41,prompt:'更强的夜间驾驶感，主体段落加入更宽阔的空间层次。'})
+      }
+      window.setTimeout(configure,180)
+      window.setTimeout(configure,1950)
       return
     }
-    if(step===6) {
+    if(step===9) {
+      setNodes(previous=>{
+        if(previous.some(node=>node.id===GUIDE_LYRICS_ID))return previous
+        const lyrics=buildGuidedLyricsNode()
+        const folder=previous.find(node=>node.type==='audioFolder')
+        const positioned=folder?{...lyrics,x:folder.x-lyrics.w-40,y:folder.y+20}:lyrics
+        return [...previous.map(node=>({...node,selected:false})),placeNodeWithoutOverlap(positioned,previous,{avoidFrames:true})]
+      })
+      return
+    }
+    if(step===10) {
+      const connect=()=>{
+        const folder=nodesRef.current.find(node=>node.type==='audioFolder')
+        if(folder)ensureLyricsConnection(folder.id)
+      }
+      connect()
+      window.setTimeout(connect,520)
+      return
+    }
+    if(step===11) {
       const folder=nodesRef.current.find(node=>node.type==='audioFolder')
       if(!folder)return
-      updateNodeData(folder.id,{mode:'remix',weirdness:61,styleInfluence:41,prompt:'更强的夜间驾驶感，副歌加入更宽阔的空间层次。'})
+      updateNodeData(folder.id,{mode:'remix',weirdness:61,styleInfluence:41,prompt:'更强的夜间驾驶感，主体段落加入更宽阔的空间层次。'})
       window.setTimeout(()=>handleGenerateAudioFolder(folder.id),80)
+      return
     }
-  },[handleCreateAudioFolder,handleDivergeFrame,handleExtractDemo,handleGenerateAudioFolder,updateNodeData])
+    if(step===12) {
+      const folder=nodesRef.current.find(node=>node.type==='audioFolder')
+      const existing=nodesRef.current.find(node=>node.type==='work')
+      if(!folder || existing)return
+      const work=((folder.data.works as WorkItem[]|undefined)??[])[0]
+      if(!work)return
+      handleExtractWork(folder.id,work,folder.x+folder.w+56,folder.y+24)
+      updateNodeData(folder.id,{works:((folder.data.works as WorkItem[]|undefined)??[]).filter(item=>item.id!==work.id)})
+    }
+  },[handleCanvasOpenDetail,handleCreateAudioFolder,handleDivergeFrame,handleExtractDemo,handleExtractWork,handleGenerateAudioFolder,updateNodeData])
 
   const compareDirs = compareIds.map(id => nodes.find(n => n.id === id)).filter(Boolean) as CanvasNode[]
   // 右侧常驻详情栏：仅画布点击 Demo/Work 才显示详情，机架点击仅选中
@@ -1479,7 +1553,8 @@ export default function App() {
         <TopToolbar
           lang={lang}
           onToggleLang={() => setLang(l => l === 'zh' ? 'en' : 'zh')}
-          projectName={activeProjectName}
+          onSearch={() => setCmdkOpen(true)}
+          projectName={localizeBuiltinText(activeProjectName,lang)}
           onOpenGallery={handleOpenGallery}
           onSaveProject={handleSaveProject}
           onRestoreProject={handleRestoreProject}
@@ -1489,7 +1564,7 @@ export default function App() {
           testMode={testMode}
           onTestModeChange={setTestMode}
           exportCounts={getProjectExportCounts(nodes)}
-          onProjectExport={kind=>runProjectExport(kind,activeProjectName,nodesRef.current,wiresRef.current,lang)}
+          onProjectExport={kind=>runProjectExport(kind,localizeBuiltinText(activeProjectName,lang),nodesRef.current,wiresRef.current,lang)}
         />
         <div style={{ display:'flex', flex:1, overflow:'hidden', minHeight:0, position:'relative' }}>
           <Canvas
@@ -1527,20 +1602,30 @@ export default function App() {
           />
           <LeftSidebar onAddNode={handleAddNode} onAddFrame={handleAddFrame} onImportFiles={handleImportFiles} lang={lang} testMode={testMode}/>
           <DetailPanel lang={lang} node={detailNode} nodes={nodes} onClose={handleCloseDetail} onSelectNode={handleRackSelect} />
+          {storageReady && activeBoardId!==GUIDED_EXAMPLE_ID && !galleryMounted && (
+            <div data-prototype-disclaimer="true" role="note" aria-label={lang==='zh'?'原型功能说明':'Prototype notice'} style={{
+              position:'absolute',right:312,bottom:10,zIndex:26,pointerEvents:'none',
+              color:'rgba(198,198,193,0.42)',fontSize:9.5,fontWeight:500,lineHeight:1.4,
+              letterSpacing:'0.01em',whiteSpace:'nowrap',textAlign:'right',userSelect:'none',
+              textShadow:'0 1px 3px rgba(0,0,0,0.72)',
+            }}>
+              {lang==='zh'?'该作品仅作为UI/UX演示原型，并未接入AI模型，功能仍在开发中':'This work is a UI/UX demonstration prototype only. No AI model is connected, and features are still in development.'}
+            </div>
+          )}
         </div>
         </div>
 
         {storageReady && activeBoardId===GUIDED_EXAMPLE_ID && !galleryMounted && (
-          <GuidedTour lang={lang} nodes={nodes} onFocusNode={handleGuideFocus}
+          <GuidedTour lang={lang} nodes={nodes} wires={wires} onFocusNode={handleGuideFocus}
             onPrepareStep={handleGuidePrepareStep} onReset={handleGuideReset} onCopy={handleCopyGuidedBoard}/>
         )}
 
         {galleryMounted && (
           <ProjectGallery lang={lang}
-            boards={upsertBoard(boards,{...currentBoardSnapshot(),thumbnail:boards.find(board=>board.id===activeBoardId)?.thumbnail,thumbnailAspect:boards.find(board=>board.id===activeBoardId)?.thumbnailAspect})}
+            boards={boards}
             activeBoardId={activeBoardId} closing={galleryClosing} testMode={testMode}
             onClose={handleCloseGallery} onToggleLang={()=>setLang(value=>value==='zh'?'en':'zh')} onTestModeChange={setTestMode}
-            onOpenBoard={handleOpenBoard} onCreateBoard={handleCreateBoard}/>
+            onOpenBoard={handleOpenBoard} onCreateBoard={handleCreateBoard} onDeleteBoard={handleDeleteBoard}/>
         )}
 
         {galleryMounted && tutorialPromptOpen && !galleryClosing && (
@@ -1588,7 +1673,15 @@ export default function App() {
         )}
 
         {cmdkOpen && (
-          <CommandBar lang={lang} onSubmit={handleCmdkSubmit} onClose={() => setCmdkOpen(false)}/>
+          <CommandBar
+            lang={lang}
+            nodes={nodes}
+            onSelect={nodeId => {
+              handleCanvasSelect(nodeId)
+              setFocusRequest({nodeId,token:Date.now()})
+            }}
+            onClose={() => setCmdkOpen(false)}
+          />
         )}
 
         {inspectedNode && (

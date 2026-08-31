@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { CanvasNode } from '../types'
 import { useLang } from '../App'
 import { nodeThemeColor } from '../theme'
+import { TileTypeIcon, type TileIconKind } from './TileTypeIcon'
 
 interface Props {
   node: CanvasNode
@@ -98,29 +99,27 @@ function NodeBadge({ node }: { node: CanvasNode }) {
   return (
     <div style={{
       width:36, height:36, borderRadius:9, flexShrink:0,
-      background: color + '18',
-      border: `1.5px solid ${color}40`,
       display:'flex', alignItems:'center', justifyContent:'center',
-      fontSize:16,
     }}>
-      {icon}
+      <TileTypeIcon kind={icon} color={color} size={25}/>
     </div>
   )
 }
 
-function getNodeMeta(node: CanvasNode): { color: string; icon: string } {
+function getNodeMeta(node: CanvasNode): { color: string; icon: TileIconKind } {
   const color = nodeThemeColor(node)
-  let icon = '·'
+  let icon:TileIconKind = 'spark'
   switch (node.type) {
-    case 'image':     icon = '🖼'; break
-    case 'audio':     icon = node.data.isRef ? '🔗' : '🎤'; break
-    case 'text':      icon = 'T'; break
-    case 'mood':      icon = '✦'; break
-    case 'explore':   icon = '⬡'; break
-    case 'direction': icon = '◈'; break
-    case 'fuse':      icon = '⊕'; break
-    case 'brief':     icon = '↗'; break
-    case 'result':    icon = '✦'; break
+    case 'image':     icon = 'image'; break
+    case 'audio':     icon = node.data.isRef ? 'reference' : 'hum'; break
+    case 'text':      icon = 'text'; break
+    case 'note':      icon = 'note'; break
+    case 'lyrics':    icon = 'lyrics'; break
+    case 'direction': icon = 'demo'; break
+    case 'work':      icon = 'work'; break
+    case 'frame':     icon = 'frame'; break
+    case 'audioFolder': icon = 'folder'; break
+    case 'mood': case 'explore': case 'fuse': case 'brief': case 'result': icon = 'spark'; break
   }
   return { color, icon }
 }

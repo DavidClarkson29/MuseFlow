@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import type { Lang } from '../i18n'
 import { strings } from '../i18n'
 import type { CanvasNode } from '../types'
+import { TileTypeIcon, type TileIconKind } from './TileTypeIcon'
+import { localizeBuiltinText } from '../contentI18n'
 
 interface Props {
   lang: Lang
@@ -26,8 +28,9 @@ export function DemoDetailModal({ lang, node, onClose }: Props) {
     return () => document.removeEventListener('keydown', h)
   }, [onClose])
 
-  const kindIcon = (k: string, isRef: boolean) => k === 'image' ? '🖼' : k === 'text' ? 'T' : isRef ? '🔗' : '🎤'
-  const sourceKind = (k:string) => k==='demo' ? '30s DEMO' : k==='reference' ? '参考音频' : k==='hum' ? '哼唱片段' : k.toUpperCase()
+  const kindIcon = (k: string, isRef: boolean):TileIconKind => k === 'image' ? 'image' : k === 'text' ? 'text' : isRef ? 'reference' : 'hum'
+  const kindColor = (k:string, isRef:boolean) => k === 'image' ? '#3BBDAF' : k === 'text' ? '#6B6EF5' : isRef ? '#4BA35A' : '#F5A523'
+  const sourceKind = (k:string) => k==='demo' ? '30s DEMO' : k==='reference' ? (lang==='zh'?'参考音频':'Reference Audio') : k==='hum' ? (lang==='zh'?'小样':'Hum Clip') : k.toUpperCase()
 
   return (
     <div onClick={onClose}
@@ -45,7 +48,7 @@ export function DemoDetailModal({ lang, node, onClose }: Props) {
             background:String(d.color ?? '#3BBDAF'), boxShadow:`0 0 10px ${String(d.color ?? '#3BBDAF')}80` }}/>
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ fontSize:16, fontWeight:800, color:'#F0F0EE', letterSpacing:'-0.02em' }}>
-              {String(d.name)} <span style={{ fontSize:10, fontWeight:700, color:String(d.color),
+              {localizeBuiltinText(d.name,lang)} <span style={{ fontSize:10, fontWeight:700, color:String(d.color),
                 border:`1px solid ${String(d.color)}45`, borderRadius:8, padding:'1px 7px', marginLeft:6 }}>{modeBadge}</span>
             </div>
             <div style={{ fontSize:10.5, color:'#4A4A48', marginTop:2 }}>{isWork ? `${modeBadge} · ${s.usedPromptL}` : `${s.recipeL} · ${s.usedPromptL}`}</div>
@@ -67,13 +70,11 @@ export function DemoDetailModal({ lang, node, onClose }: Props) {
                   {recipe.mats.map(m => (
                     <div key={m.name}>
                       <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:3 }}>
-                        <span style={{ width:17, height:17, borderRadius:4, fontSize:9, flexShrink:0,
-                          background:'#1E1E1C', border:'1px solid #2C2C2A',
-                          display:'flex', alignItems:'center', justifyContent:'center' }}>
-                          {kindIcon(m.kind, m.isRef)}
+                        <span style={{ width:17, height:17, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                          <TileTypeIcon kind={kindIcon(m.kind, m.isRef)} color={kindColor(m.kind,m.isRef)} size={15}/>
                         </span>
                         <span style={{ flex:1, minWidth:0, fontSize:11, color:'#C0C0BC',
-                          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.name}</span>
+                          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{localizeBuiltinText(m.name,lang)}</span>
                         <span style={{ fontSize:11, fontWeight:800, color:'#8A8AFF',
                           fontFamily:"'JetBrains Mono',monospace" }}>{m.weight}%</span>
                       </div>
@@ -94,14 +95,14 @@ export function DemoDetailModal({ lang, node, onClose }: Props) {
                   <div style={{ marginTop:10, padding:'7px 10px', background:'#161010',
                     border:'1px solid #2E1E20', borderRadius:7 }}>
                     <span style={{ fontSize:9, fontWeight:800, color:'#E06A5A90', marginRight:6 }}>🚫 {s.negativeL}</span>
-                    <span style={{ fontSize:10.5, color:'#D8A8A0' }}>{recipe.negative}</span>
+                    <span style={{ fontSize:10.5, color:'#D8A8A0' }}>{localizeBuiltinText(recipe.negative,lang)}</span>
                   </div>
                 )}
                 {recipe.prompt && (
                   <div style={{ marginTop:10, padding:'8px 10px', background:'#0F0F14',
                     border:'1px solid #23233A', borderRadius:7 }}>
                     <div style={{ fontSize:9, fontWeight:700, color:'#7A7A86', marginBottom:4, letterSpacing:'0.04em' }}>{s.promptL}</div>
-                    <div style={{ fontSize:10.5, color:'#9A9AC0', lineHeight:1.6, whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{recipe.prompt}</div>
+                    <div style={{ fontSize:10.5, color:'#9A9AC0', lineHeight:1.6, whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{localizeBuiltinText(recipe.prompt,lang)}</div>
                   </div>
                 )}
               </Section>
@@ -113,8 +114,8 @@ export function DemoDetailModal({ lang, node, onClose }: Props) {
               <div style={{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:8}}>
                 {workSources.map(source=><div key={source.id} style={{minWidth:0,borderRadius:9,overflow:'hidden',border:`1px solid ${source.color}35`,background:`linear-gradient(145deg,${source.color}13,#121216)`}}>
                   <div style={{height:32,display:'flex',alignItems:'center',gap:7,padding:'0 9px',borderTop:`2px solid ${source.color}`,borderBottom:'1px solid #ffffff0C'}}>
-                    <span style={{color:source.color,fontSize:10}}>♫</span>
-                    <strong style={{flex:1,minWidth:0,fontSize:10.5,color:'#D6D5DE',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{source.name}</strong>
+                    <TileTypeIcon kind={source.kind==='demo'?'demo':source.kind==='reference'?'reference':source.kind==='hum'?'hum':'work'} color={source.color} size={13}/>
+                    <strong style={{flex:1,minWidth:0,fontSize:10.5,color:'#D6D5DE',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{localizeBuiltinText(source.name,lang)}</strong>
                     <span style={{fontSize:7.5,fontWeight:800,color:source.color}}>{sourceKind(source.kind)}</span>
                   </div>
                   <div style={{padding:'9px',display:'flex',alignItems:'center',gap:3,height:42}}>
@@ -127,7 +128,7 @@ export function DemoDetailModal({ lang, node, onClose }: Props) {
           ) : (
             <Section title={`▢ ${s.panelTitle} · ${s.recipeL}`}>
               <div style={{ padding:'10px 12px', background:'#141413', border:'1px dashed #2A2A28', borderRadius:8, fontSize:10.5, color:'#5A5A56', lineHeight:1.6 }}>
-                暂无控制台快照。请在黑板控制台调整比重/形态/人声/拍号后重新「{s.divergeBtn}」，新生成的 Demo 将在此处回显当时的控制台参数。
+                {lang==='zh'?<>暂无控制台快照。请在黑板控制台调整比重/形态/人声/拍号后重新「{s.divergeBtn}」，新生成的 Demo 将在此处回显当时的控制台参数。</>:<>No console snapshot yet. Adjust weights, format, vocals, or time signature in the board console and run “{s.divergeBtn}” again. New demos will show the parameters used at generation time.</>}
               </div>
             </Section>
           )}
@@ -136,7 +137,7 @@ export function DemoDetailModal({ lang, node, onClose }: Props) {
           <Section title={`✦ ${s.usedPromptL}`}>
             <pre style={{ margin:0, padding:'12px 14px', background:'#0F0F14',
               border:'1px solid #23233A', borderRadius:9, fontSize:11, lineHeight:1.9,
-              color:'#B8BAE0', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{String(d.usedPrompt ?? '')}</pre>
+              color:'#B8BAE0', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{localizeBuiltinText(d.usedPrompt,lang)}</pre>
           </Section>
         </div>
       </div>

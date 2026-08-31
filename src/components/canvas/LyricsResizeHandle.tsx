@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react'
 import type { CanvasNode } from '../../types'
+import { useLang } from '../../App'
 
 export function LyricsResizeHandle({ node, onUpdateNodeSize }: {
   node: CanvasNode
   onUpdateNodeSize: (id: string, w: number, h: number) => void
 }) {
+  const s=useLang()
   const resizeRef = useRef<{ pointerId:number; startY:number; startH:number; scaleY:number } | null>(null)
   const resizeCleanupRef = useRef<(() => void) | null>(null)
 
@@ -13,9 +15,9 @@ export function LyricsResizeHandle({ node, onUpdateNodeSize }: {
   return (
     <button
       type="button"
-      aria-label="调整歌词窗口高度"
+      aria-label={s.langToggle==='EN'?'调整歌词窗口高度':'Resize lyric panel height'}
       data-lyrics-resize-handle="1"
-      title="上下拖动调整歌词窗口高度"
+      title={s.langToggle==='EN'?'上下拖动调整歌词窗口高度':'Drag vertically to resize the lyric panel'}
       onPointerDown={e => {
         e.stopPropagation()
         const host = e.currentTarget.closest('[data-node]') as HTMLElement | null

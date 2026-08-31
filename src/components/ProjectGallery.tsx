@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Lang } from '../i18n'
 import type { CanvasNode, Wire } from '../types'
+import { localizeBuiltinText } from '../contentI18n'
 
 export interface GalleryBoard {
   id: string
@@ -27,22 +28,26 @@ interface Props {
   onTestModeChange: (enabled:boolean) => void
   onOpenBoard: (id:string) => void
   onCreateBoard: () => void
+  onDeleteBoard: (id:string) => void
 }
 
-export default function ProjectGallery({ lang, boards, activeBoardId, closing, testMode, onClose, onToggleLang, onTestModeChange, onOpenBoard, onCreateBoard }:Props) {
+export default function ProjectGallery({ lang, boards, activeBoardId, closing, testMode, onClose, onToggleLang, onTestModeChange, onOpenBoard, onCreateBoard, onDeleteBoard }:Props) {
   const zh = lang === 'zh'
   const [query,setQuery] = useState('')
   const [showProfile,setShowProfile] = useState(false)
+  const [pendingDeleteId,setPendingDeleteId] = useState<string | null>(null)
   const profileRef=useRef<HTMLDivElement>(null)
-  const shown = useMemo(() => boards.filter(board => board.name.toLowerCase().includes(query.trim().toLowerCase())),[boards,query])
+  const shown = useMemo(() => boards.filter(board => localizeBuiltinText(board.name,lang).toLowerCase().includes(query.trim().toLowerCase())),[boards,query,lang])
 
   useEffect(() => {
     const onKeyDown = (event:KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Escape') return
+      if (pendingDeleteId) setPendingDeleteId(null)
+      else onClose()
     }
     window.addEventListener('keydown',onKeyDown)
     return () => window.removeEventListener('keydown',onKeyDown)
-  },[onClose])
+  },[onClose,pendingDeleteId])
 
   useEffect(()=>{
     if(!showProfile) return
@@ -84,27 +89,43 @@ export default function ProjectGallery({ lang, boards, activeBoardId, closing, t
             <h1>{zh?'你的创作空间':'Your creative spaces'}</h1>
             <p>{zh?'选择一个画板继续创作，或从一张空白画布开始。':'Choose a board to continue, or begin with a blank canvas.'}</p>
           </div>
-          <button className="project-gallery__new-button" onClick={onCreateBoard}><PlusIcon/>{zh?'新建画板':'New board'}</button>
+          <div className="project-gallery__create-area">
+            <p className="project-gallery__archive-disclaimer">{zh?'该作品仅作为UI/UX演示原型，不具备存档功能':'This work is a UI/UX demonstration prototype only and does not provide archive functionality.'}</p>
+            <button className="project-gallery__new-button" onClick={onCreateBoard}><PlusIcon/>{zh?'新建画板':'New board'}</button>
+          </div>
         </div>
 
         <section className="project-gallery__grid" aria-label={zh?'画板列表':'Board list'}>
           {shown.map((board,index) => (
-            <button key={board.id} className={`project-board ${board.id===activeBoardId?'project-board--active':''} ${board.kind==='example'?'project-board--example':''}`}
-              style={{ animationDelay:`${Math.min(index,5)*35}ms` }} onClick={()=>onOpenBoard(board.id)}>
-              <div className="project-board__preview" style={board.thumbnailAspect?{aspectRatio:String(board.thumbnailAspect)}:undefined}>
-                <BoardThumbnail board={board}/>
-                <span className="project-board__open">{zh?'打开画板':'Open board'} <span>↗</span></span>
-              </div>
-              <div className="project-board__meta">
-                <span className="project-board__name">{board.kind==='example' && <i className="project-board__example-badge">{zh?'实例':'Example'}</i>}{board.name}</span>
-                <span className="project-board__time">{formatUpdated(board.updatedAt,lang)}</span>
-              </div>
-              <div className="project-board__submeta">
-                <span>{board.kind==='example' ? board.description : (zh?`${board.nodes.filter(node=>node.visible).length} 张卡片`:`${board.nodes.filter(node=>node.visible).length} cards`)}</span>
-                {board.kind==='example' && <span className="project-board__duration">◷ {board.durationLabel}</span>}
-                {board.id===activeBoardId && <span className="project-board__current">{zh?'当前画板':'Current'}</span>}
-              </div>
-            </button>
+            <div key={board.id} className="project-board-shell">
+              <button className={`project-board ${board.id===activeBoardId?'project-board--active':''} ${board.kind==='example'?'project-board--example':''}`}
+                style={{ animationDelay:`${Math.min(index,5)*35}ms` }} onClick={()=>onOpenBoard(board.id)}>
+                <div className="project-board__preview" style={board.thumbnailAspect?{aspectRatio:String(board.thumbnailAspect)}:undefined}>
+                  <BoardThumbnail board={board} lang={lang}/>
+                  <span className="project-board__open">{zh?'打开画板':'Open board'} <span>↗</span></span>
+                </div>
+                <div className="project-board__meta">
+                  <span className="project-board__name">{board.kind==='example' && <i className="project-board__example-badge">{zh?'实例':'Example'}</i>}{localizeBuiltinText(board.name,lang)}</span>
+                  <span className="project-board__time">{formatUpdated(board.updatedAt,lang)}</span>
+                </div>
+                <div className="project-board__submeta">
+                  <span>{board.kind==='example' ? localizeBuiltinText(board.description,lang) : (zh?`${board.nodes.filter(node=>node.visible).length} 张卡片`:`${board.nodes.filter(node=>node.visible).length} cards`)}</span>
+                  {board.kind==='example' && <span className="project-board__duration">◷ {localizeBuiltinText(board.durationLabel,lang)}</span>}
+                  {board.id===activeBoardId && <span className="project-board__current">{zh?'当前画板':'Current'}</span>}
+                </div>
+              </button>
+              {board.kind!=='example' && (
+                <button className="project-board__delete" aria-label={zh?`删除画板 ${board.name}`:`Delete board ${localizeBuiltinText(board.name,lang)}`}
+                  onClick={event=>{event.stopPropagation();setPendingDeleteId(board.id)}}><TrashIcon/></button>
+              )}
+              {pendingDeleteId===board.id && board.kind!=='example' && (
+                <div className="project-board__delete-confirm" onClick={event=>event.stopPropagation()}>
+                  <strong>{zh?'删除这个存档？':'Delete this board?'}</strong>
+                  <span>{zh?'删除后无法恢复':'This cannot be undone'}</span>
+                  <div><button onClick={()=>setPendingDeleteId(null)}>{zh?'取消':'Cancel'}</button><button className="is-danger" onClick={()=>{setPendingDeleteId(null);onDeleteBoard(board.id)}}>{zh?'删除':'Delete'}</button></div>
+                </div>
+              )}
+            </div>
           ))}
         </section>
       </main>
@@ -112,7 +133,11 @@ export default function ProjectGallery({ lang, boards, activeBoardId, closing, t
   )
 }
 
-function BoardThumbnail({board}:{board:GalleryBoard}) {
+function TrashIcon() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
+}
+
+function BoardThumbnail({board,lang}:{board:GalleryBoard;lang:Lang}) {
   if (board.thumbnail) return <img className="board-shot-image" src={board.thumbnail} alt="" draggable={false}/>
   const visible = board.nodes.filter(node=>node.visible)
   const bounds = visible.reduce((acc,node) => ({
@@ -129,7 +154,7 @@ function BoardThumbnail({board}:{board:GalleryBoard}) {
   return (
     <div className="board-shot">
       <div className="board-shot__toolbar">
-        <i/><b>Museflow</b><span/><span/><em>{board.name}</em><i/><i/>
+        <i/><b>Museflow</b><span/><span/><em>{localizeBuiltinText(board.name,lang)}</em><i/><i/>
       </div>
       <div className="board-shot__workspace">
         <div className="board-shot__rail"><span/><span/><span/><span/><span/></div>
@@ -145,7 +170,7 @@ function BoardThumbnail({board}:{board:GalleryBoard}) {
                 const x1=from.x-originX+from.w, y1=from.y-originY+from.h/2, x2=to.x-originX, y2=to.y-originY+to.h/2
                 return <path key={wire.id} d={`M${x1} ${y1} C${(x1+x2)/2} ${y1},${(x1+x2)/2} ${y2},${x2} ${y2}`} fill="none" stroke={wire.color || '#6B6EF5'} strokeWidth="3" opacity=".46"/>
               })}
-              {visible.map(node => <MiniNode key={node.id} node={node} x={node.x-originX} y={node.y-originY}/>)}
+              {visible.map(node => <MiniNode key={node.id} node={node} x={node.x-originX} y={node.y-originY} lang={lang}/>)}
             </svg>
           )}
         </div>
@@ -172,7 +197,7 @@ function GalleryProfileMenu({lang,testMode,onTestModeChange}:{lang:Lang;testMode
   </div>
 }
 
-function MiniNode({node,x,y}:{node:CanvasNode;x:number;y:number}) {
+function MiniNode({node,x,y,lang}:{node:CanvasNode;x:number;y:number;lang:Lang}) {
   const color = nodeColor(node.type)
   const label = String(node.data.name ?? node.data.label ?? node.data.content ?? node.type)
   const imageUrl = typeof node.data.imageUrl === 'string' ? node.data.imageUrl : ''
@@ -181,7 +206,7 @@ function MiniNode({node,x,y}:{node:CanvasNode;x:number;y:number}) {
     <rect width={node.w} height="35" rx="12" fill="#141413"/>
     <path d={`M0 35H${node.w}`} stroke="#30302e"/>
     <circle cx="17" cy="17.5" r="6" fill={color} opacity=".8"/>
-    <text x="30" y="22" fill="#c8c8c4" fontSize="13" fontWeight="700" fontFamily="Inter,Arial">{label.slice(0,18)}</text>
+    <text x="30" y="22" fill="#c8c8c4" fontSize="13" fontWeight="700" fontFamily="Inter,Arial">{localizeBuiltinText(label,lang).slice(0,18)}</text>
     {imageUrl ? <image href={imageUrl} x="0" y="35" width={node.w} height={Math.max(0,node.h-35)} preserveAspectRatio="xMidYMid slice" opacity=".78"/> : <>
       <rect x="16" y="53" width={Math.max(20,node.w-32)} height="7" rx="3.5" fill={color} opacity=".22"/>
       <rect x="16" y="69" width={Math.max(18,(node.w-32)*.68)} height="5" rx="2.5" fill="#555550" opacity=".4"/>

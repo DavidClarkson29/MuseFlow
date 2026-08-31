@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
 import type { CanvasNode } from '../../types'
 import { useLang } from '../../App'
 import type { WorkItem } from './model'
-import { AudioCardHeader, AudioCardMood, AudioCardPlayback, durationSeconds, WorkSourceRows } from './AudioCardPrimitives'
+import { AudioCardHeader, AudioCardMood, AudioCardPlayback, WorkSourceRows } from './AudioCardPrimitives'
+import { useAudioPlayback } from '../../hooks/useAudioPlayback'
+import { resolveGuidedAudio } from '../../guidedAudio'
+import { localizeBuiltinText } from '../../contentI18n'
 
 export function WorkContent({ node, onOpenDetail }: { node:CanvasNode; onOpenDetail:(id:string)=>void }) {
   return <WorkCard work={node.data as unknown as WorkItem} cardId={node.id} onOpenDetail={onOpenDetail}/>
@@ -35,32 +37,25 @@ export function WorkCard({ work:d, cardId, onOpenDetail, onRemove }: {
   onRemove?: () => void
 }) {
   const s = useLang()
-  const [playing,setPlaying] = useState(false)
-  const [prog,setProg] = useState(0)
+  const lang=s.langToggle==='EN'?'zh':'en'
   const workDuration = String(d.duration ?? '3:30')
-  useEffect(() => {
-    if (!playing) return
-    const total = Math.max(1,durationSeconds(workDuration))
-    const t = window.setInterval(() => setProg(p => {
-      const next = Math.min(100,p+100/(total*10))
-      if (next >= 100) window.setTimeout(()=>setPlaying(false),0)
-      return next
-    }), 100)
-    return () => window.clearInterval(t)
-  }, [playing,workDuration])
+  const audioUrl=d.audioUrl??resolveGuidedAudio(d.name)?.audioUrl
   const color = d.color || '#8A7CFF', accent = d.accent || '#42D9D0'
   const sources = d.sources ?? []
   const mode = String(d.mode || 'remix').toUpperCase()
   const hasLyrics = !!(d as any).lyrics || (typeof (d as any).usedPrompt === 'string' && String((d as any).usedPrompt).includes('歌词'))
+  const {playing,progress,durationLabel,toggle,seek,audioProps}=useAudioPlayback({
+    id:`work:${cardId}`,title:localizeBuiltinText(d.name,lang),duration:workDuration,color,accent,audioUrl,
+  })
   return (
     <div data-card-kind="work" style={{ width:'100%', height:'100%', display:'flex', flexDirection:'column', position:'relative', overflow:'hidden',
       borderRadius:11, border:`1px solid ${color}55`,
       background:`radial-gradient(circle at 92% 6%,${accent}28,transparent 34%),radial-gradient(circle at 4% 100%,${color}28,transparent 42%),#15151B`,
       boxShadow:`0 14px 34px rgba(0,0,0,.42),0 0 28px ${color}18` }}>
-      <AudioCardHeader title={d.name} badge={mode} primary={color} badgeColor={accent}
-        hasLyrics={hasLyrics} onOpen={()=>onOpenDetail?.(cardId)} onRemove={onRemove} removeLabel="移除作品"/>
+      <AudioCardHeader title={localizeBuiltinText(d.name,lang)} badge={mode} primary={color} badgeColor={accent}
+        hasLyrics={hasLyrics} onOpen={()=>onOpenDetail?.(cardId)} onRemove={onRemove} removeLabel={lang==='zh'?'移除作品':'Remove track'}/>
       <div data-card-part="body" style={{ padding:'9px 10px 8.75px',display:'flex',flexDirection:'column',gap:7,flex:1,minHeight:0 }}>
-        <AudioCardMood label={String(d.mood ?? mode)} color={color}/>
+        <AudioCardMood label={localizeBuiltinText(d.mood ?? mode,lang)} color={color}/>
         <WorkSourceRows sources={sources}/>
         <div style={{flex:1,minHeight:0,display:'flex',flexDirection:'column',justifyContent:'center'}}>
           {(() => {
@@ -99,13 +94,14 @@ export function WorkCard({ work:d, cardId, onOpenDetail, onRemove }: {
               <>
                 <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,fontSize:9}}><span style={{color:'#5D5B67'}}>{s.originalRatio}</span><span style={{color:'#817F8C',fontFamily:"'JetBrains Mono',monospace"}}>{segs.map(v=>`${v}%`).join(' · ')}</span></div>
                 <div style={{display:'flex',height:3,borderRadius:2,background:'#2A2930',overflow:'hidden'}}>{segs.map((v,i)=><div key={i} style={{width:`${v}%`,background:(sources[i] as unknown as {color:string}|undefined)?.color ?? (i%2?accent:color)}}/>)}</div>
-                {n < 4 && <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:3}}>{sources.map((s,i)=><span key={s.id} style={{fontSize:8,color:(s as unknown as {color:string}).color ?? (i%2?accent:color)}}>{String(s.name).slice(0,6)} {segs[i]}%</span>)}</div>}
+                {n < 4 && <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:3}}>{sources.map((source,i)=><span key={source.id} style={{fontSize:8,color:(source as unknown as {color:string}).color ?? (i%2?accent:color)}}>{localizeBuiltinText(source.name,lang).slice(0,10)} {segs[i]}%</span>)}</div>}
               </>
             )
           })()}
         </div>
-      <AudioCardPlayback playing={playing} progress={prog} duration={workDuration} primary={color} secondary={accent}
-        onToggle={()=>{if(playing)setPlaying(false);else{if(prog>=100)setProg(0);setPlaying(true)}}}/>
+      <AudioCardPlayback playing={playing} progress={progress} duration={durationLabel} primary={color} secondary={accent}
+        onToggle={toggle} onSeek={seek}/>
+      {audioProps&&<audio {...audioProps}/>} 
       </div>
     </div>
   )

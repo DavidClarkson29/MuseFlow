@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react'
 import type { CanvasNode, Wire, PendingWire, Port } from '../types'
 import { useLang } from '../App'
 import { nodeThemeColor, hexToRgb } from '../theme'
@@ -18,6 +18,12 @@ import { useNodeDrag } from './canvas/useNodeDrag'
 import { useWireDrag } from './canvas/useWireDrag'
 import { CardContextMenu, canExportNode } from './canvas/CardContextMenu'
 import { emitGuideEvent } from '../guideEvents'
+import { TileTypeIcon, type TileIconKind } from './TileTypeIcon'
+import { MaterialMiniature } from './MaterialMiniature'
+import { beginPlayback, stopPlayback, updatePlayback } from '../playbackStore'
+import { formatAudioDuration } from '../hooks/useAudioPlayback'
+import { resolveGuidedAudio } from '../guidedAudio'
+import { localizeBuiltinText } from '../contentI18n'
 
 export { DEMO_CARD_H, DEMO_CARD_W, WORK_CARD_H, WORK_CARD_W } from './canvas/model'
 export type { DemoItem, InboundRef, WorkItem, WorkSource } from './canvas/model'
@@ -636,7 +642,7 @@ export default function Canvas({
           const x = ghost.isInput ? node.x : node.x + node.w
           const y = node.y + ghost.yRel
           return (
-            <button type="button" aria-label="拖动连接" onPointerDown={handleGhostPointerDown}
+            <button type="button" aria-label={langS.langToggle==='EN'?'拖动连接':'Drag to connect'} onPointerDown={handleGhostPointerDown}
               style={{ position:'absolute', left:x-8, top:y-22, width:16, height:44, padding:0,
                 border:0, outline:'none', background:'transparent', overflow:'visible',
                 cursor:'crosshair', zIndex:24, color:ghost.color, pointerEvents:'auto' }}>
@@ -853,6 +859,7 @@ function ZoomInput({ zoom, applyZoom, outerRef }: {
   applyZoom: (newZ: number, fx: number, fy: number) => void
   outerRef: React.RefObject<HTMLDivElement | null>
 }) {
+  const langS=useLang()
   const [editing, setEditing] = useState(false)
   const [inputVal, setInputVal] = useState('')
   const zoomPct = Math.round(zoom * 100)
@@ -892,7 +899,7 @@ function ZoomInput({ zoom, applyZoom, outerRef }: {
 
   return (
     <button
-      title="点击输入缩放比例"
+      title={langS.langToggle==='EN'?'点击输入缩放比例':'Click to enter zoom percentage'}
       onClick={() => { setInputVal(String(zoomPct)); setEditing(true) }}
       style={{ padding:'5px 8px', background:'transparent', border:'none', color:'#6A6A66', fontSize:11, fontFamily:"'JetBrains Mono',monospace", fontWeight:500, cursor:'text', minWidth:42, textAlign:'center' }}
       onMouseEnter={e=>{ e.currentTarget.style.color='#C0C0BC' }}
@@ -982,7 +989,7 @@ function NodeCard({ node, nodes, wires, onSelect, langS, onUpdateNodeData, onDiv
         node.y + node.h/2 > f.y && node.y + node.h/2 < f.y + f.h)
     : undefined
   const inFrame = !!frame
-  const hidePersistentPortDots = node.type === 'frame' || node.type === 'audioFolder'
+  const hidePersistentPortDots = node.type === 'frame' || (node.type === 'audioFolder' && !pendingWire)
   let dispX = node.x
   if (frame) dispX = Math.min(node.x, frame.x + FRAME_CANVAS_W - node.w - 6)
   const gravity = !!node.data.kept
@@ -1051,6 +1058,8 @@ function NodeCard({ node, nodes, wires, onSelect, langS, onUpdateNodeData, onDiv
         onPointerDown={onPointerDownHeader}
         onClickCapture={e => {
           if ((node.type === 'direction' && node.data.demo) || node.type === 'work') {
+            const target=e.target as HTMLElement
+            if(target.closest('button,[role="slider"],input,textarea,select,audio,a'))return
             e.stopPropagation()
             onOpenDemoDetail(node.id)
           }
@@ -1079,7 +1088,7 @@ function NodeCard({ node, nodes, wires, onSelect, langS, onUpdateNodeData, onDiv
         }}
       >
         <div style={{ flex:1, minHeight:0, width:'100%', height:'100%', borderRadius: isResult ? 14 : 10, overflow:'clip', display:'flex', flexDirection:'column' }}>
-          <NodeContent node={node} inbound={inbound} compareIds={compareIds} actions={actions} onExport={onExport} nodes={nodes} wires={wires} langS={langS} onUpdateNodeData={onUpdateNodeData} onDivergeFrame={onDivergeFrame} onGenerateAudioFolder={onGenerateAudioFolder} onOpenDemoDetail={onOpenDemoDetail} onExtractSource={onExtractSource} onRemoveSource={onRemoveSource} lyricsPreviewOpen={lyricsPreviewOpen} onToggleLyricsPreview={() => setLyricsPreviewOpen(v => !v)}/>
+          <NodeContent node={node} inbound={inbound} compareIds={compareIds} actions={actions} onExport={onExport} nodes={nodes} wires={wires} langS={langS} onUpdateNodeData={onUpdateNodeData} onUpdateNodeSize={onUpdateNodeSize} onDivergeFrame={onDivergeFrame} onGenerateAudioFolder={onGenerateAudioFolder} onOpenDemoDetail={onOpenDemoDetail} onExtractSource={onExtractSource} onRemoveSource={onRemoveSource} lyricsPreviewOpen={lyricsPreviewOpen} onToggleLyricsPreview={() => setLyricsPreviewOpen(v => !v)}/>
         </div>
         {node.type === 'lyrics' && lyricsPreviewOpen && (
           <LyricsPreviewPanel node={node} onClose={() => setLyricsPreviewOpen(false)} />
@@ -1123,6 +1132,8 @@ function NodeCard({ node, nodes, wires, onSelect, langS, onUpdateNodeData, onDiv
 }
 
 function LyricsPreviewPanel({ node, onClose }: { node: CanvasNode; onClose: () => void }) {
+  const s=useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const sections = (node.data.sections as Array<{id:string, type:string, label:string, content:string}> | undefined) ?? []
   const colors: Record<string, string> = {
     intro: '#8A8AFF', verse: '#3BBDAF', preChorus: '#9B7EFF', chorus: '#E56B8A', bridge: '#F5A523', outro: '#7A7A78', custom: '#E56B8A',
@@ -1140,7 +1151,7 @@ function LyricsPreviewPanel({ node, onClose }: { node: CanvasNode; onClose: () =
   return (
     <div
       role="region"
-      aria-label="歌词浏览"
+      aria-label={s.lyricBrowse}
       onPointerDown={event => event.stopPropagation()}
       onClick={event => event.stopPropagation()}
       onWheel={event => event.stopPropagation()}
@@ -1157,18 +1168,18 @@ function LyricsPreviewPanel({ node, onClose }: { node: CanvasNode; onClose: () =
         {populatedSections.length === 0 ? (
           <div style={{ height:'100%', display:'grid', placeItems:'center', textAlign:'center' }}>
             <div>
-              <div style={{ color:'#4F4F59', fontSize:24, marginBottom:10 }}>♪</div>
-              <div style={{ color:'#6C6C75', fontSize:11, fontWeight:650 }}>还没有可浏览的歌词</div>
+              <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}><TileTypeIcon kind="lyrics" color="#4F4F59" size={24}/></div>
+              <div style={{ color:'#6C6C75', fontSize:11, fontWeight:650 }}>{lang==='zh'?'还没有可浏览的歌词':'No lyrics to browse yet'}</div>
             </div>
           </div>
         ) : populatedSections.map((section, sectionIndex) => {
           const color = colors[section.type] ?? '#E56B8A'
-          const lines = String(section.content).split(/\r?\n/)
+          const lines = localizeBuiltinText(section.content,lang).split(/\r?\n/)
           return (
             <section key={section.id} style={{ marginBottom:sectionIndex === populatedSections.length - 1 ? 0 : 34, scrollSnapAlign:'start' }}>
               <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:11, color, fontSize:8, fontWeight:800, letterSpacing:'0.08em' }}>
                 <span style={{ width:4, height:4, borderRadius:'50%', background:color, boxShadow:`0 0 8px ${color}88` }}/>
-                <span>{section.label}</span>
+                <span>{localizeBuiltinText(section.label,lang)}</span>
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
                 {lines.map((line, lineIndex) => (
@@ -1192,10 +1203,10 @@ function LyricsPreviewPanel({ node, onClose }: { node: CanvasNode; onClose: () =
 function EmptyState({ onAddNode }: { onAddNode: (type: string) => void; onAddFrame?: () => void }) {
   const s = useLang()
   const items = [
-    { t: 'image', label: s.qAddImage, icon: '🖼' },
-    { t: 'audio-hum', label: s.qRecordMelody, icon: '🎤' },
-    { t: 'text', label: s.qWriteThought, icon: 'T' },
-    { t: 'audio-ref', label: s.qAddReference, icon: '🔗' },
+    { t: 'image', label: s.qAddImage, icon: 'image' as TileIconKind, color:'#3BBDAF' },
+    { t: 'audio-hum', label: s.qRecordMelody, icon: 'hum' as TileIconKind, color:'#F5A523' },
+    { t: 'text', label: s.qWriteThought, icon: 'text' as TileIconKind, color:'#6B6EF5' },
+    { t: 'audio-ref', label: s.qAddReference, icon: 'reference' as TileIconKind, color:'#4BA35A' },
   ]
   return (
     <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', zIndex:15, pointerEvents:'none' }}>
@@ -1209,7 +1220,7 @@ function EmptyState({ onAddNode }: { onAddNode: (type: string) => void; onAddFra
                 background:'#1A1A19', border:'1px solid #2C2C2A', borderRadius:10,
                 color:'#C0C0BC', fontSize:11.5, fontWeight:600, cursor:'pointer',
                 fontFamily:"'Inter',sans-serif", pointerEvents:'auto' }}>
-              <span style={{ fontSize:13 }}>{it.icon}</span>{it.label}
+              <TileTypeIcon kind={it.icon} color={it.color} size={16}/>{it.label}
             </button>
           ))}
         </div>
@@ -1220,10 +1231,12 @@ function EmptyState({ onAddNode }: { onAddNode: (type: string) => void; onAddFra
 // ── Image ─────────────────────────────────────────────────────────────────────
 
 function ImageContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void }) {
+  const s=useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const kws = (node.data.keywords as string[] | undefined) ?? []
   return (
     <>
-      <NodeHdr label={String(node.data.label ?? '图片')} icon="🖼" accent="#3BBDAF"
+      <NodeHdr label={localizeBuiltinText(node.data.label ?? s.nodeImage,lang)} icon={<TileTypeIcon kind="image" color="#3BBDAF" size={17}/>} accent="#3BBDAF"
         editable onRename={v => onUpdateNodeData(node.id, { label: v })}/>
       <div style={{ flex:1, minHeight:0, position:'relative', overflow:'hidden' }}>
         <img src={node.data.imageUrl as string} alt="" draggable={false}
@@ -1234,7 +1247,7 @@ function ImageContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNo
             {kws.map(k => (
               <span key={k} style={{ fontSize:8.5, fontWeight:600, padding:'1.5px 6px',
                 borderRadius:4, background:'rgba(0,0,0,0.5)', border:'1px solid rgba(255,255,255,0.14)',
-                color:'#FFD9A8' }}>{k}</span>
+                color:'#FFD9A8' }}>{localizeBuiltinText(k,lang)}</span>
             ))}
           </div>
         </div>
@@ -1250,40 +1263,85 @@ const WF_B = [6,12,20,16,10,8,14,22,18,12,16,20,14,10,18,22,20,16,12,8,14,18,22,
 
 function AudioContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void }) {
   const s    = useLang()
+  const lang = s.langToggle==='EN'?'zh':'en'
   const isRef = node.data.isRef as boolean
   const color = isRef ? '#4BA35A' : '#F5A523'
   const wf    = isRef ? WF_B : WF_A
   const [an, setAn] = useState(node.data.analysis as { bpm:number; key:string; style:string } | null | undefined)
   const [playing,setPlaying] = useState(false)
+  const [audioProgress,setAudioProgress]=useState(0)
+  const [realDuration,setRealDuration]=useState(String(node.data.duration??'0:00'))
   const audioRef = useRef<HTMLAudioElement>(null)
-  const audioUrl = typeof node.data.audioUrl === 'string' ? node.data.audioUrl : ''
+  const playbackHandle=useRef<number|null>(null)
+  const storedAudioUrl = typeof node.data.audioUrl === 'string' ? node.data.audioUrl : ''
+  const fallbackAudio=resolveGuidedAudio(String(node.data.name??node.data.fileName??node.data.label??''))
+  const audioUrl = storedAudioUrl||fallbackAudio?.audioUrl||''
   const guidePlayable = !!node.data.guidePlayable
+  const durationLabel=realDuration
+  const trackTitle=localizeBuiltinText(trToken(String(node.data.label??node.data.fileName??(isRef?s.ref:s.hum)),s),lang)
   useEffect(() => {
     if (isRef && !an) {
       const t = window.setTimeout(() => setAn({ bpm: 120, key: 'C Major', style: 'Pop / Funk' }), 1400)
       return () => window.clearTimeout(t)
     }
   }, [isRef, an])
-  useEffect(() => () => audioRef.current?.pause(), [])
+  useEffect(()=>{
+    if(!playing || audioUrl)return
+    const [minutes,seconds]=durationLabel.split(':').map(Number)
+    const total=Math.max(1,(Number.isFinite(minutes)?minutes:0)*60+(Number.isFinite(seconds)?seconds:0))
+    let elapsed=0
+    const timer=window.setInterval(()=>{
+      elapsed+=.1
+      const progress=Math.min(100,elapsed/total*100)
+      if(playbackHandle.current!==null)updatePlayback(playbackHandle.current,{progress})
+      if(progress>=100){
+        if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+        playbackHandle.current=null
+      }
+    },100)
+    return()=>window.clearInterval(timer)
+  },[audioUrl,durationLabel,playing])
+  useEffect(() => () => {
+    audioRef.current?.pause()
+    if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+  }, [])
   const toggleAudio = () => {
     const audio = audioRef.current
+    if(playing){
+      if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+      playbackHandle.current=null
+      audio?.pause()
+      setPlaying(false)
+      return
+    }
+    const startGlobal=()=>{
+      playbackHandle.current=beginPlayback({id:`audio:${node.id}`,title:trackTitle,duration:durationLabel,color,progress:audioProgress},()=>{
+        audioRef.current?.pause()
+        setPlaying(false)
+      })
+      setPlaying(true)
+    }
     if(guidePlayable && !audioUrl){
-      setPlaying(value=>!value)
+      startGlobal()
       onUpdateNodeData(node.id,{guidePlayedAt:Date.now()})
       emitGuideEvent({type:'audio-play',nodeId:node.id})
       return
     }
     if (!audioUrl || !audio) return
     emitGuideEvent({type:'audio-play',nodeId:node.id})
-    if (audio.paused) void audio.play().then(()=>setPlaying(true)).catch(()=>setPlaying(false))
-    else { audio.pause(); setPlaying(false) }
+    startGlobal()
+    void audio.play().catch(()=>{
+      if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+      playbackHandle.current=null
+      setPlaying(false)
+    })
   }
   return (
     <>
-      <NodeHdr label={trToken(String(node.data.label ?? ''), s)} icon={isRef ? '🔗' : '🎤'} accent={color}
+      <NodeHdr label={localizeBuiltinText(trToken(String(node.data.label ?? ''), s),lang)} icon={<TileTypeIcon kind={isRef ? 'reference' : 'hum'} color={color} size={17}/>} accent={color}
         editable onRename={v => onUpdateNodeData(node.id, { label: v })}/>
       <div style={{ flex:1, minHeight:0, padding:'6px 9px 4px', display:'flex', alignItems:'center' }}>
-        <button type="button" className={guidePlayable?'guide-audio-hit':''} data-guide-target={`audio-play-${node.id}`} disabled={!audioUrl&&!guidePlayable} aria-label={playing?'暂停音频':'播放音频'}
+        <button type="button" className={guidePlayable?'guide-audio-hit':''} data-guide-target={`audio-play-${node.id}`} data-guide-audio-control="1" disabled={!audioUrl&&!guidePlayable} aria-label={playing?(lang==='zh'?'暂停音频':'Pause audio'):(lang==='zh'?'播放音频':'Play audio')}
           onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();toggleAudio()}}
           style={{ position:'relative', zIndex:guidePlayable?3:undefined, width:guidePlayable?48:24, height:guidePlayable?48:24, margin:guidePlayable?-12:0, padding:0, border:0, borderRadius:12, background:'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
             cursor:audioUrl||guidePlayable?'pointer':'default',opacity:audioUrl||guidePlayable?1:.72 }}>
@@ -1293,22 +1351,41 @@ function AudioContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNo
               : <svg width="9" height="9" viewBox="0 0 24 24" fill={color}><path d="M5 3l14 9-14 9V3z"/></svg>}
           </span>
         </button>
-        {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" onEnded={()=>setPlaying(false)} onPause={()=>setPlaying(false)}/>} 
+        {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" onLoadedMetadata={event=>{
+          const next=formatAudioDuration(event.currentTarget.duration)
+          setRealDuration(next)
+          if(next!==String(node.data.duration??''))onUpdateNodeData(node.id,{duration:next})
+          if(playbackHandle.current!==null)updatePlayback(playbackHandle.current,{duration:next})
+        }}
+          onTimeUpdate={event=>{
+            const audio=event.currentTarget
+            const progress=audio.duration>0?audio.currentTime/audio.duration*100:0
+            setAudioProgress(progress)
+            if(playbackHandle.current!==null)updatePlayback(playbackHandle.current,{progress})
+          }}
+          onEnded={()=>{
+            if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+            playbackHandle.current=null
+            setPlaying(false)
+            setAudioProgress(0)
+          }} onPause={()=>setPlaying(false)}/>} 
         <div style={{ flex:1, minWidth:0, marginLeft:7 }}>
-          <div style={{ display:'flex', alignItems:'flex-end', gap:1.5, height:20 }}>
+          <div role={audioUrl?'slider':undefined} data-guide-audio-control="1" tabIndex={audioUrl?0:undefined} aria-label={audioUrl?(lang==='zh'?'音频进度':'Audio progress'):undefined} aria-valuemin={audioUrl?0:undefined} aria-valuemax={audioUrl?100:undefined} aria-valuenow={audioUrl?Math.round(audioProgress):undefined}
+            onPointerDown={audioUrl?event=>{event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();const next=Math.max(0,Math.min(100,(event.clientX-rect.left)/rect.width*100));setAudioProgress(next);if(audioRef.current&&audioRef.current.duration>0)audioRef.current.currentTime=audioRef.current.duration*next/100;if(playbackHandle.current!==null)updatePlayback(playbackHandle.current,{progress:next})}:undefined}
+            style={{ display:'flex', alignItems:'flex-end', gap:1.5, height:20, cursor:audioUrl?'pointer':'default' }}>
             {wf.map((h, i) => (
-              <div key={i} style={{ width:2.5, borderRadius:1.5, height:Math.round(h*0.82), background: i<10 ? color : '#2C2C2A', opacity: i<10 ? 0.9 : 0.6 }}/>
+              <div key={i} style={{ width:2.5, borderRadius:1.5, height:Math.round(h*0.82), background: i/wf.length*100<=audioProgress ? color : '#2C2C2A', opacity: i/wf.length*100<=audioProgress ? 0.9 : 0.6 }}/>
             ))}
           </div>
           <div style={{ fontSize:9, color:'#4A4A48', marginTop:2, fontFamily:"'JetBrains Mono',monospace" }}>
-            {isRef ? s.ref : s.hum} · {node.data.duration as string}
+            {isRef ? s.ref : s.hum} · {durationLabel}
           </div>
           {isRef && (
             <div style={{ fontSize:8.5, color:'#6A8A70', marginTop:1.5,
               fontFamily:"'JetBrains Mono',monospace",
               overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
-              title={trToken(String(node.data.fileName ?? ''), s)}>
-              {trToken(String(node.data.fileName ?? ''), s)}
+              title={localizeBuiltinText(trToken(String(node.data.fileName ?? ''), s),lang)}>
+              {localizeBuiltinText(trToken(String(node.data.fileName ?? ''), s),lang)}
             </div>
           )}
         </div>
@@ -1326,7 +1403,7 @@ function AudioContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNo
               <Chip label={an.style.split(' / ')[0]} c="#5EC96E"/>
             </div>
           ) : (
-            <span style={{ fontSize:9, color:'#6A8A70', fontStyle:'italic' }}>识别中…</span>
+            <span style={{ fontSize:9, color:'#6A8A70', fontStyle:'italic' }}>{lang==='zh'?'识别中…':'Analyzing…'}</span>
           )}
         </div>
       )}
@@ -1344,23 +1421,47 @@ function Chip({ label, c }: { label:string; c:string }) {
 
 // ── Text ──────────────────────────────────────────────────────────────────────
 
-function TextContent({ node, onUpdateNodeData }: { node: CanvasNode; onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void }) {
+function TextContent({ node, onUpdateNodeData, onUpdateNodeSize }: {
+  node: CanvasNode
+  onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
+  onUpdateNodeSize?: (id: string, w: number, h: number) => void
+}) {
   const s = useLang()
-  const [text, setText] = useState(node.data.content as string)
+  const lang=s.langToggle==='EN'?'zh':'en'
+  const [text, setText] = useState(localizeBuiltinText(node.data.content,lang))
   const [focused, setFocused] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => setText(localizeBuiltinText(node.data.content,lang)), [node.data.content,lang])
+
+  useLayoutEffect(() => {
+    const textarea=textareaRef.current
+    if(!textarea || !onUpdateNodeSize)return
+    textarea.style.height='0px'
+    const contentHeight=textarea.scrollHeight
+    textarea.style.height='100%'
+    const desiredHeight=Math.max(100,Math.ceil(contentHeight+46))
+    if(Math.abs(desiredHeight-node.h)>1)onUpdateNodeSize(node.id,node.w,desiredHeight)
+  },[text,node.h,node.id,node.w,onUpdateNodeSize])
+
   return (
     <>
-      <NodeHdr label={String(node.data.title ?? '') || s.hdrText} icon="T" accent="#6B6EF5"
+      <NodeHdr label={localizeBuiltinText(node.data.title,lang) || s.hdrText} icon={<TileTypeIcon kind="text" color="#6B6EF5" size={17}/>} accent="#6B6EF5"
         editable onRename={v => onUpdateNodeData(node.id, { title: v })}/>
       <div style={{ flex:1, padding:'6px 10px', display:'flex' }}>
         <textarea
+          ref={textareaRef}
           value={text}
-          onChange={e => setText(e.target.value)}
+          onChange={e => {
+            const value=e.target.value
+            setText(value)
+            onUpdateNodeData(node.id,{content:value})
+          }}
           onClick={e => e.stopPropagation()}
           onPointerDown={e => e.stopPropagation()}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          placeholder="在此输入文字意向…"
+          placeholder={lang==='zh'?'在此输入文字意向…':'Enter your text intent…'}
           style={{
             width:'100%', height:'100%', resize:'none', outline:'none',
             background:'transparent',
@@ -1386,7 +1487,7 @@ function IntentContent({ node }: { node: CanvasNode }) {
 
   return (
     <>
-      <NodeHdr label={s.nodeIntent} icon="◈" accent="#9B7EFF"/>
+      <NodeHdr label={s.nodeIntent} icon={<TileTypeIcon kind="intent" color="#9B7EFF" size={17}/>} accent="#9B7EFF"/>
       <div style={{ flex:1, padding:'8px 10px', display:'flex', flexWrap:'wrap', gap:4, alignContent:'flex-start' }}>
         {tags.map((tag, i) => (
           <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:3,
@@ -1424,6 +1525,7 @@ function IntentContent({ node }: { node: CanvasNode }) {
 
 function ConstraintContent({ node }: { node: CanvasNode }) {
   const s = useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const [text, setText] = useState(trToken(node.data.text as string, s))
   const [locked, setLocked] = useState(!!node.data.locked)
   return (
@@ -1435,7 +1537,7 @@ function ConstraintContent({ node }: { node: CanvasNode }) {
         <button onClick={e=>{ e.stopPropagation(); setLocked(l=>!l) }}
           style={{ marginLeft:'auto', fontSize:9, cursor:'pointer', background:'transparent',
             border:'none', color: locked ? '#E06A5A' : '#5A5A56' }}>
-          {locked ? '必须保留' : '可调整'}
+          {locked ? (lang==='zh'?'必须保留':'Must keep') : (lang==='zh'?'可调整':'Adjustable')}
         </button>
       </div>
       <input value={text} onChange={e=>setText(e.target.value)}
@@ -1450,6 +1552,7 @@ function ConstraintContent({ node }: { node: CanvasNode }) {
 
 function QuestionContent({ node }: { node: CanvasNode }) {
   const s = useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const [answer, setAnswer] = useState('')
   const [answered, setAnswered] = useState<string | null>((node.data.answered as string | null) ?? null)
   const isAI = (node.data.source ?? 'ai') === 'ai'
@@ -1474,7 +1577,7 @@ function QuestionContent({ node }: { node: CanvasNode }) {
             <input value={answer} onChange={e=>setAnswer(e.target.value)}
               onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
               onKeyDown={e=>{ e.stopPropagation(); if (e.key==='Enter' && answer.trim()) setAnswered(answer.trim()) }}
-              placeholder="写下想法…"
+              placeholder={lang==='zh'?'写下想法…':'Write a thought…'}
               style={{ flex:1, minWidth:0, background:'#141413', border:'1px solid #2A2A28', borderRadius:5,
                 color:'#C0C0BC', fontSize:10, padding:'4px 8px', outline:'none' }}/>
             <button onClick={e=>{ e.stopPropagation(); if (answer.trim()) setAnswered(answer.trim()) }}
@@ -1492,17 +1595,25 @@ function QuestionContent({ node }: { node: CanvasNode }) {
   )
 }
 
-function NoteContent({ node }: { node: CanvasNode }) {
+function NoteContent({ node, onUpdateNodeData }: {
+  node: CanvasNode
+  onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
+}) {
   const s = useLang()
-  const [text, setText] = useState(String(node.data.text ?? ''))
+  const lang=s.langToggle==='EN'?'zh':'en'
+  const [text, setText] = useState(localizeBuiltinText(node.data.text,lang))
+  useEffect(() => setText(localizeBuiltinText(node.data.text,lang)), [node.data.text,lang])
   return (
     <div style={{
       width:'100%', height:'100%', background:'linear-gradient(180deg,#F5E6A8,#EBD98F)',
       borderRadius:4, boxShadow:'0 4px 14px rgba(0,0,0,0.35)',
-      transform:'rotate(-1deg)', padding:'10px 11px', display:'flex', flexDirection:'column',
-    }}
-      onPointerDown={e=>e.stopPropagation()}>
-      <textarea value={text} onChange={e=>setText(e.target.value)}
+      transform:'rotate(-1deg)', padding:'18px 11px 10px', display:'flex', flexDirection:'column',
+    }}>
+      <textarea value={text} onChange={e=>{
+        const value=e.target.value
+        setText(value)
+        onUpdateNodeData(node.id,{text:value})
+      }}
         onClick={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}
         placeholder={s.notePh}
         style={{ flex:1, resize:'none', background:'transparent', border:'none', outline:'none',
@@ -1539,8 +1650,9 @@ function InterpretationContent({ node }: { node: CanvasNode }) {
     <>
       <div style={{ height:34, flexShrink:0, background:'#141413', borderBottom:'1px solid #2C2C2A',
         borderTop:'2px solid #6B6EF5', display:'flex', alignItems:'center', padding:'0 10px', gap:7 }}>
-        <div style={{ width:18, height:18, borderRadius:4, background:'#6B6EF530', border:'1px solid #6B6EF560',
-          display:'flex', alignItems:'center', justifyContent:'center', fontSize:10 }}>✦</div>
+        <div style={{ width:18, height:18, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <TileTypeIcon kind="spark" color="#8A8AFF" size={17}/>
+        </div>
         <span style={{ fontSize:11, fontWeight:700, color:'#8A8AFF' }}>{s.aiUnderstanding}</span>
         {agreed && <span style={{ marginLeft:'auto', fontSize:9, fontWeight:700, color:'#5EC96E' }}>✓</span>}
       </div>
@@ -1604,7 +1716,8 @@ function IBtn({ label, onClick }: { label:string; onClick:()=>void }) {
 
 function FieldContent({ node }: { node: CanvasNode }) {
   const s = useLang()
-  const [name, setName] = useState(String(node.data.name ?? ''))
+  const lang=s.langToggle==='EN'?'zh':'en'
+  const [name, setName] = useState(localizeBuiltinText(node.data.name,lang))
   return (
     <div style={{ width:'100%', height:'100%', position:'relative', pointerEvents:'none' }}>
       <div style={{ position:'absolute', inset:0, borderRadius:18,
@@ -1628,12 +1741,13 @@ function FieldContent({ node }: { node: CanvasNode }) {
 
 // ── Node content router ──
 
-function NodeContent({ node, inbound, compareIds, actions, onExport, nodes, wires, langS, onUpdateNodeData, onDivergeFrame, onGenerateAudioFolder, onOpenDemoDetail, onExtractSource, onRemoveSource, lyricsPreviewOpen, onToggleLyricsPreview }: {
+function NodeContent({ node, inbound, compareIds, actions, onExport, nodes, wires, langS, onUpdateNodeData, onUpdateNodeSize, onDivergeFrame, onGenerateAudioFolder, onOpenDemoDetail, onExtractSource, onRemoveSource, lyricsPreviewOpen, onToggleLyricsPreview }: {
   node: CanvasNode; inbound: InboundRef[]
   compareIds: string[]
   actions: IdeationActions; onExport: () => void
   nodes: CanvasNode[]; wires: Wire[]; langS: ReturnType<typeof useLang>
   onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
+  onUpdateNodeSize?: (id: string, w: number, h: number) => void
   onDivergeFrame: (frameId: string) => void
   onGenerateAudioFolder: (folderId: string) => void
   onOpenDemoDetail: (id: string) => void
@@ -1645,11 +1759,11 @@ function NodeContent({ node, inbound, compareIds, actions, onExport, nodes, wire
   switch (node.type) {
     case 'image':          return <ImageContent node={node} onUpdateNodeData={onUpdateNodeData}/>
     case 'audio':          return <AudioContent node={node} onUpdateNodeData={onUpdateNodeData}/>
-    case 'text':           return <TextContent node={node} onUpdateNodeData={onUpdateNodeData}/>
+    case 'text':           return <TextContent node={node} onUpdateNodeData={onUpdateNodeData} onUpdateNodeSize={onUpdateNodeSize}/>
     case 'intent':         return <IntentContent node={node}/>
     case 'constraint':     return <ConstraintContent node={node}/>
     case 'question':       return <QuestionContent node={node}/>
-    case 'note':           return <NoteContent node={node}/>
+    case 'note':           return <NoteContent node={node} onUpdateNodeData={onUpdateNodeData}/>
     case 'interpretation': return <InterpretationContent node={node}/>
     case 'field':          return <FieldContent node={node}/>
     case 'lyrics':         return <LyricsContent node={node} onUpdateNodeData={onUpdateNodeData} previewOpen={lyricsPreviewOpen} onTogglePreview={onToggleLyricsPreview}/>
@@ -2024,6 +2138,7 @@ function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDiverg
   onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void
   onDivergeFrame: (frameId: string) => void
 }) {
+  const lang=s.langToggle==='EN'?'zh':'en'
   const connectedLyrics = wires
     .filter(w => w.toNodeId === node.id || w.fromNodeId === node.id)
     .map(w => {
@@ -2039,14 +2154,14 @@ function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDiverg
   const d = node.data
   const generating = !!d.generating
   const set = (patch: Record<string, unknown>) => onUpdateNodeData(node.id, patch)
-  const matIcon = (m: CanvasNode) => m.type === 'image' ? '🖼' : m.type === 'text' ? 'T' : (m.data.isRef ? '🔗' : '🎤')
+  const matIcon = (m: CanvasNode):TileIconKind => m.type === 'image' ? 'image' : m.type === 'text' ? 'text' : (m.data.isRef ? 'reference' : 'hum')
   const matName = (m: CanvasNode) => {
     if (m.type === 'text') return String(m.data.title ?? '') || s.hdrText
     const raw = String(m.data.label ?? m.data.name ?? '')
     if (raw === '__HUM__') return s.addHumClip
     if (raw === '__REF__') return s.addRefAudio
     if (raw === '__HUM__' || raw === '__REF__' || raw.startsWith('__')) return raw.replace(/__/g, '')
-    return raw || s.nodeAudio
+    return localizeBuiltinText(raw || s.nodeAudio,lang)
   }
   const matColor = (m: CanvasNode) => nodeThemeColor(m)
   // 场本地坐标：扣除黑板头部 + 卡片边框 1px
@@ -2076,26 +2191,11 @@ function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDiverg
       {/* Header — 上层遮盖 */}
       <div data-frame-header={node.id} style={{ position:'relative', zIndex:10, flexShrink:0, height:FRAME_HEADER_H, boxSizing:'border-box', background:'#131312', borderBottom:'1px solid #26262A',
         display:'flex', alignItems:'center', gap:9, padding:'10px 14px' }}>
-        {(() => {
-          const n = mats.length
-          const cfg = n <= 4 ? { cols:2, cell:6, gap:4 } : n <= 9 ? { cols:3, cell:5, gap:3 } : { cols:4, cell:4, gap:2.5 }
-          const show = mats.slice(0,16)
-          return (
-            <div style={{ width:34, height:29, borderRadius:8, flexShrink:0,
-              background:'linear-gradient(135deg,#6B6EF530,#3BBDAF20)', border:'1px solid #6B6EF555',
-              display:'grid', gridTemplateColumns:`repeat(${cfg.cols},${cfg.cell}px)`, gridAutoRows:`${cfg.cell}px`, gap:cfg.gap, placeContent:'center' }}>
-              {show.length ? show.map(m => (
-                <span key={m.id} style={{ borderRadius:1.5, background:matColor(m) }} />
-              )) : [0,1,2,3].map(i => (
-                <span key={i} style={{ width:6, height:6, borderRadius:2, background: i===0 ? '#6B6EF5' : '#2A2A34', opacity: i===0 ? 0.9 : 0.6 }} />
-              ))}
-            </div>
-          )
-        })()}
+        <MaterialMiniature colors={mats.map(matColor)} accent="#6B6EF5"/>
         <div style={{ minWidth:0, flex:1 }}>
           <div style={{ display:'flex', alignItems:'center', gap:6, minWidth:0 }}>
             <span style={{ fontSize:9, fontWeight:800, letterSpacing:'0.08em', textTransform:'uppercase', color:'#8A8AFF', flexShrink:0 }}>{s.frameTitle}</span>
-            <input value={String(d.name ?? '')} placeholder={s.fieldPh}
+            <input value={localizeBuiltinText(d.name,lang)} placeholder={s.fieldPh}
               onClick={e=>e.stopPropagation()} onPointerDown={e=>{ e.stopPropagation(); (e.target as HTMLElement).focus() }}
               onChange={e=>set({ name: e.target.value })}
               style={{ width:140, flexShrink:0, background:'transparent', border:'none', outline:'none',
@@ -2109,16 +2209,19 @@ function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDiverg
         <span style={{ fontSize:8.5, color:'#6B6EF5', fontWeight:800, fontFamily:"'JetBrains Mono',monospace", flexShrink:0, marginLeft:8 }}>
           {mats.length} {s.inFrameTag}
         </span>
+        <div style={{ width:28, height:28, flexShrink:0, display:'grid', placeItems:'center' }}>
+          <TileTypeIcon kind="frame" color="#8A8AFF" size={22}/>
+        </div>
       </div>
       {connectedLyrics.length > 0 && (
         <div style={{ position:'relative', zIndex:10, flexShrink:0, height:FRAME_LYRICS_BAR_H, boxSizing:'border-box', background:'#1A1218', borderBottom:'1px solid #2E1E26', padding:'6px 14px', display:'flex', alignItems:'center', gap:7 }}>
           <span style={{ fontSize:8, fontWeight:700, color:'#E56B8A', background:'#E56B8A18', border:'1px solid #E56B8A30', borderRadius:10, padding:'2px 6px', flexShrink:0, display:'inline-flex', alignItems:'center', gap:4 }}>
-            <span style={{ fontSize:9 }}>♪</span> 已连接歌词
+            <TileTypeIcon kind="lyrics" color="#E56B8A" size={10}/> {lang==='zh'?'已连接歌词':'Lyrics connected'}
           </span>
           <span style={{ flex:1, minWidth:0, fontSize:9.5, color:'#D8B0BE', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-            {connectedLyrics.map(n => String((n.data as any).title ?? '未命名歌词')).join(' · ')}
+            {connectedLyrics.map(n => localizeBuiltinText((n.data as any).title ?? '未命名歌词',lang)).join(' · ')}
           </span>
-          <span style={{ fontSize:8, color:'#8A5A6E', flexShrink:0 }}>{connectedLyrics.length} 首</span>
+          <span style={{ fontSize:8, color:'#8A5A6E', flexShrink:0 }}>{connectedLyrics.length} {lang==='zh'?'首':'tracks'}</span>
         </div>
       )}
 
@@ -2193,7 +2296,7 @@ function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDiverg
                   border:`1px solid ${matColor(m)}30`, background:'#171716', cursor:'ew-resize' }}>
                   <div style={{ position:'absolute', inset:'0 auto 0 0', width:`${wOf(m)}%`, background:matColor(m)+'20', transition:'none' }}/>
                   <div style={{ position:'relative', height:'100%', padding:'0 8px', display:'flex', alignItems:'center', gap:6, pointerEvents:'none' }}>
-                    <span style={{ fontSize:10 }}>{matIcon(m)}</span>
+                    <TileTypeIcon kind={matIcon(m)} color={matColor(m)} size={13}/>
                     <span style={{ flex:1, minWidth:0, fontSize:9.5, fontWeight:650, color:'#A0A09C', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{matName(m)}</span>
                     <span style={{ color:matColor(m), fontSize:9, fontWeight:800, fontFamily:"'JetBrains Mono',monospace" }}>{wOf(m)}%</span>
                   </div>
@@ -2215,7 +2318,7 @@ function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDiverg
 
             <SegRow label={s.timeSignature}>
               <button onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ timeSig: '' })}
-                style={{ ...segBtn(!d.timeSig || d.timeSig==='' ,'#9B7EFF'), flex:1, padding:'5px 0' }}>不指定</button>
+                style={{ ...segBtn(!d.timeSig || d.timeSig==='' ,'#9B7EFF'), flex:1, padding:'5px 0' }}>{lang==='zh'?'不指定':'Any'}</button>
               {['4/4','3/4','6/8','5/4','7/8'].map(sig => (
                 <button key={sig} onPointerDown={e=>e.stopPropagation()} onClick={()=>set({ timeSig:sig })}
                   style={{ ...segBtn(d.timeSig===sig,'#9B7EFF'), flex:1, padding:'5px 0' }}>{sig}</button>
@@ -2224,7 +2327,7 @@ function FrameContent({ node, nodes, wires, langS: s, onUpdateNodeData, onDiverg
 
             <div style={{ display:'flex', flexDirection:'column' }}>
               <div style={{ fontSize:9, color:'#A65C50', fontWeight:700, marginBottom:5 }}>⊘ {s.negativeL}</div>
-              <textarea value={String(d.negative ?? '')} placeholder={s.negativePh}
+              <textarea value={localizeBuiltinText(d.negative,lang)} placeholder={s.negativePh}
                 onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()}
                 onChange={e=>set({ negative:e.target.value })}
                 style={{ height:72, width:'100%', resize:'none', padding:'7px 8px', borderRadius:7,
@@ -2268,13 +2371,14 @@ function SegRow({ label, children }: { label:string; children:React.ReactNode })
 }
 
 function composeFramePrompt(s: ReturnType<typeof useLang>, frame: CanvasNode, mats: CanvasNode[]): string {
+  const lang=s.langToggle==='EN'?'zh':'en'
   const sorted = [...mats].sort((a,b)=>(Number(b.data.weight??0))-(Number(a.data.weight??0)))
-  const parts = sorted.map(m => `${String(m.data.name ?? m.data.label ?? '').slice(0,8)} ${Number(m.data.weight??0)}%`)
+  const parts = sorted.map(m => `${localizeBuiltinText(m.data.name ?? m.data.label,lang).slice(0,18)} ${Number(m.data.weight??0)}%`)
   const vocal = frame.data.mode === 'inst' ? s.modeInst : `${s.modeSong} · ${frame.data.vocal==='male'?s.male:s.female}`
   const ref = mats.find(m=>m.data.isRef)
   const an = ref?.data.analysis as { bpm:number; key:string; style:string } | undefined
   const timeSigRaw = String(frame.data.timeSig ?? '').trim()
-  const timeSigPart = timeSigRaw ? `${timeSigRaw} ${s.timeSignature}` : `不指定${s.timeSignature}`
+  const timeSigPart = timeSigRaw ? `${timeSigRaw} ${s.timeSignature}` : `${s.timeSignature}: ${s.durationAuto}`
   const L = [
     `${vocal}，${timeSigPart}${an ? `，${an.bpm} BPM · ${an.key}` : ''}。`,
     an ? `${s.styleL}: ${an.style}。` : '',
@@ -2288,6 +2392,7 @@ function composeFramePrompt(s: ReturnType<typeof useLang>, frame: CanvasNode, ma
 
 function PromptContent({ node }: { node: CanvasNode }) {
   const s = useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   return (
     <div style={{ width:'100%', height:'100%', background:'#101014', borderRadius:10,
       border:'1px solid #26263A', display:'flex', flexDirection:'column', overflow:'hidden' }}>
@@ -2298,7 +2403,7 @@ function PromptContent({ node }: { node: CanvasNode }) {
       </div>
       <pre style={{ flex:1, minHeight:0, margin:0, padding:'10px 12px', overflowY:'auto',
         fontSize:10, lineHeight:1.7, color:'#9A9AC0', whiteSpace:'pre-wrap',
-        fontFamily:"'JetBrains Mono',monospace" }} className="thin-scroll">{String(node.data.text ?? '')}</pre>
+        fontFamily:"'JetBrains Mono',monospace" }} className="thin-scroll">{localizeBuiltinText(node.data.text,lang)}</pre>
     </div>
   )
 }

@@ -59,7 +59,7 @@ export async function createImportedNodes(files:File[], kind:ImportKind, startX:
     const duration = await readAudioDuration(url)
     nodes.push({
       id:importId('audio'), type:'audio', x, y, w:200, h:isHum?100:156, visible:true, selected:false, inputs:[], outputs:[],
-      data:{ label:isHum?'哼唱片段':'参考音频', name:baseName(file.name), fileName:file.name, duration,
+      data:{ label:isHum?'小样':'参考音频', name:baseName(file.name), fileName:file.name, duration,
         isHum, isRef:!isHum, weight:isHum?45:35, analysis:null, audioUrl:url, assetId,
         fileType:file.type, fileSize:file.size, imported:true },
     })

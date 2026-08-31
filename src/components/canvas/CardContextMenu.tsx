@@ -1,5 +1,6 @@
 import type { CanvasNode } from '../../types'
 import { downloadNodeAudio, exportNodeLyrics, isAudioExportNode } from './exporters'
+import { emitGuideEvent } from '../../guideEvents'
 
 export function canExportNode(node: CanvasNode) {
   return node.type === 'lyrics' || isAudioExportNode(node)
@@ -16,6 +17,7 @@ export function CardContextMenu({ node, x, y, onClose, onExported, labels }: {
   const isLyrics = node.type === 'lyrics'
   const run = () => {
     const fileName = isLyrics ? exportNodeLyrics(node) : downloadNodeAudio(node)
+    if(!isLyrics)emitGuideEvent({type:'audio-download',nodeId:node.id})
     onExported(fileName)
     onClose()
   }

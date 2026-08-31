@@ -3,6 +3,7 @@ import type { CanvasNode } from '../types'
 const DEFAULT_GAP=18
 const SEARCH_STEP=36
 const MAX_RING=72
+type PlacementOptions={avoidFrames?:boolean}
 
 function isFrameChild(candidate:CanvasNode, obstacle:CanvasNode) {
   if(obstacle.type!=='frame' || !['image','audio','text'].includes(candidate.type))return false
@@ -11,16 +12,17 @@ function isFrameChild(candidate:CanvasNode, obstacle:CanvasNode) {
   return cx>obstacle.x && cx<obstacle.x+obstacle.w && cy>obstacle.y && cy<obstacle.y+obstacle.h
 }
 
-function overlaps(candidate:CanvasNode, obstacle:CanvasNode, gap=DEFAULT_GAP) {
-  if(!obstacle.visible || obstacle.id===candidate.id || isFrameChild(candidate,obstacle))return false
+function overlaps(candidate:CanvasNode, obstacle:CanvasNode, gap=DEFAULT_GAP,options:PlacementOptions={}) {
+  if(!obstacle.visible || obstacle.id===candidate.id)return false
+  if(!options.avoidFrames && isFrameChild(candidate,obstacle))return false
   return candidate.x<obstacle.x+obstacle.w+gap
     && candidate.x+candidate.w+gap>obstacle.x
     && candidate.y<obstacle.y+obstacle.h+gap
     && candidate.y+candidate.h+gap>obstacle.y
 }
 
-function isFree(candidate:CanvasNode, existing:CanvasNode[]) {
-  return !existing.some(node=>overlaps(candidate,node))
+function isFree(candidate:CanvasNode, existing:CanvasNode[],options:PlacementOptions) {
+  return !existing.some(node=>overlaps(candidate,node,DEFAULT_GAP,options))
 }
 
 /**
@@ -28,8 +30,8 @@ function isFree(candidate:CanvasNode, existing:CanvasNode[]) {
  * deterministic expanding grid around it so newly created tiles never cover
  * existing tiles while still appearing close to the user's intended location.
  */
-export function placeNodeWithoutOverlap(candidate:CanvasNode, existing:CanvasNode[]) {
-  if(isFree(candidate,existing))return candidate
+export function placeNodeWithoutOverlap(candidate:CanvasNode, existing:CanvasNode[],options:PlacementOptions={}) {
+  if(isFree(candidate,existing,options))return candidate
   const originX=candidate.x
   const originY=candidate.y
   for(let ring=1;ring<=MAX_RING;ring++) {
@@ -40,15 +42,15 @@ export function placeNodeWithoutOverlap(candidate:CanvasNode, existing:CanvasNod
     for(let x=-ring+1;x<ring;x++)offsets.push([x,-ring])
     for(const [ox,oy] of offsets) {
       const placed={...candidate,x:originX+ox*SEARCH_STEP,y:originY+oy*SEARCH_STEP}
-      if(isFree(placed,existing))return placed
+      if(isFree(placed,existing,options))return placed
     }
   }
   const furthestRight=existing.filter(node=>node.visible).reduce((right,node)=>Math.max(right,node.x+node.w),originX)
   return {...candidate,x:furthestRight+DEFAULT_GAP,y:originY}
 }
 
-export function placeNodesWithoutOverlap(candidates:CanvasNode[],existing:CanvasNode[]) {
+export function placeNodesWithoutOverlap(candidates:CanvasNode[],existing:CanvasNode[],options:PlacementOptions={}) {
   const placed:CanvasNode[]=[]
-  for(const candidate of candidates)placed.push(placeNodeWithoutOverlap(candidate,[...existing,...placed]))
+  for(const candidate of candidates)placed.push(placeNodeWithoutOverlap(candidate,[...existing,...placed],options))
   return placed
 }

@@ -1,8 +1,14 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import type { CanvasNode, Wire } from '../../types'
 import { useLang } from '../../App'
 import type { WorkSource } from './model'
+import { TileTypeIcon } from '../TileTypeIcon'
+import { MaterialMiniature } from '../MaterialMiniature'
+import { beginPlayback, stopPlayback, updatePlayback } from '../../playbackStore'
+import { durationSeconds } from './AudioCardPrimitives'
+import { resolveGuidedAudio } from '../../guidedAudio'
+import { localizeBuiltinText } from '../../contentI18n'
 
 export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGenerate, onExtractSource, onRemoveSource }: {
   node:CanvasNode
@@ -21,6 +27,7 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
     })
     .filter(Boolean) as CanvasNode[]
   const s = useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const d = node.data
   const sources = (d.sources as WorkSource[] | undefined) ?? []
   const mode = String(d.mode ?? 'remix') as 'cover'|'remix'|'mashup'|'extended'|'finalize'
@@ -30,6 +37,9 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
   const selectedModeNeedsMultiple = mode === 'remix' || mode === 'mashup'
   const canGenerate = sources.length > 0 && !(hasSingleSource && selectedModeNeedsMultiple)
   const [playingId, setPlayingId] = useState<string | null>(null)
+  const audioRef=useRef<HTMLAudioElement>(null)
+  const playbackHandle=useRef<number|null>(null)
+  const stopLocal=useCallback(()=>{audioRef.current?.pause();setPlayingId(null)},[])
   const set = (patch:Record<string,unknown>) => onUpdateNodeData(node.id,patch)
   const modes = [
     { id:'cover' as const, label:s.coverMode, color:'#FF6A9B' },
@@ -42,6 +52,53 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
   useEffect(()=>{
     if (hasSingleSource && selectedModeNeedsMultiple) onUpdateNodeData(node.id,{mode:'cover'})
   },[hasSingleSource,selectedModeNeedsMultiple,node.id,onUpdateNodeData])
+
+  useEffect(()=>{
+    if(!playingId)return
+    const source=sources.find(item=>item.id===playingId)
+    if(!source)return
+    if(source.audioUrl??resolveGuidedAudio(source.name)?.audioUrl)return
+    const total=Math.max(1,durationSeconds(source.duration??'0:30'))
+    let elapsed=0
+    const timer=window.setInterval(()=>{
+      elapsed+=.1
+      const progress=Math.min(100,elapsed/total*100)
+      if(playbackHandle.current!==null)updatePlayback(playbackHandle.current,{progress})
+      if(progress>=100){
+        if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+        playbackHandle.current=null
+      }
+    },100)
+    return()=>window.clearInterval(timer)
+  },[playingId,sources])
+
+  useEffect(()=>()=>{
+    audioRef.current?.pause()
+    if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+  },[])
+
+  const toggleSourcePlayback=(source:WorkSource)=>{
+    const sourceAudioUrl=source.audioUrl??resolveGuidedAudio(source.name)?.audioUrl
+    if(playingId===source.id){
+      if(playbackHandle.current!==null)stopPlayback(playbackHandle.current)
+      playbackHandle.current=null
+      setPlayingId(null)
+      return
+    }
+    audioRef.current?.pause()
+    playbackHandle.current=beginPlayback({id:`folder:${node.id}:${source.id}`,title:localizeBuiltinText(source.name,lang),duration:source.duration??'0:30',color:source.color||'#8A7CFF',accent:source.accent,progress:0},stopLocal)
+    setPlayingId(source.id)
+    if(sourceAudioUrl&&audioRef.current){
+      audioRef.current.src=sourceAudioUrl
+      audioRef.current.load()
+      void audioRef.current.play().catch(()=>{
+        const handle=playbackHandle.current
+        playbackHandle.current=null
+        if(handle!==null)stopPlayback(handle)
+        setPlayingId(null)
+      })
+    }
+  }
 
   type DragState = { source:WorkSource; startX:number; startY:number; x:number; y:number; offsetX:number; offsetY:number; w:number; h:number; moved:boolean }
   const [dragging, setDragging] = useState<DragState | null>(null)
@@ -104,31 +161,45 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
     <div style={{ width:'100%', height:'100%', padding:'13px 14px 14px', boxSizing:'border-box', overflow:'hidden',
       background:'linear-gradient(155deg,#181721 0%,#121216 64%,#111518 100%)',
       display:'flex', flexDirection:'column', gap:11 }}>
+      <audio ref={audioRef} preload="metadata" onLoadedMetadata={event=>{
+        const audio=event.currentTarget
+        if(audio.duration>0&&playbackHandle.current!==null){
+          const seconds=Math.max(0,Math.round(audio.duration))
+          updatePlayback(playbackHandle.current,{duration:`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`})
+        }
+      }} onTimeUpdate={event=>{
+        const audio=event.currentTarget
+        if(playbackHandle.current!==null&&audio.duration>0)updatePlayback(playbackHandle.current,{progress:audio.currentTime/audio.duration*100})
+      }} onEnded={()=>{
+        const handle=playbackHandle.current
+        playbackHandle.current=null
+        setPlayingId(null)
+        if(handle!==null)stopPlayback(handle)
+      }}/>
       <div style={{ display:'flex', alignItems:'center', gap:9, margin:'-13px -14px 0', padding:'10px 14px', background:'#131312', borderBottom:'1px solid #26262A' }}>
-        <div style={{ width:34, height:29, borderRadius:8, flexShrink:0,
-          background:'linear-gradient(135deg,#8A7CFF30,#42D9D020)', border:'1px solid #8A7CFF55',
-          display:'grid', gridTemplateColumns:'repeat(2,6px)', gridAutoRows:'6px', gap:4, placeContent:'center' }}>
-          {sources.slice(0,4).map((source,i)=><span key={source.id} style={{ borderRadius:2, background:source.color || (i%2?'#42D9D0':'#8A7CFF') }}/>) }
-        </div>
+        <MaterialMiniature colors={sources.map(source=>source.color || '#8A7CFF')} accent="#8A7CFF"/>
         <div style={{ minWidth:0, flex:1 }}>
           <div style={{ fontSize:11.5, fontWeight:800, color:'#ECEBF5' }}>{s.audioFolderTitle}</div>
           <div style={{ fontSize:8.5, color:'#69677A', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-            {sources.map(source=>source.name).join(' + ')}
+            {sources.map(source=>localizeBuiltinText(source.name,lang)).join(' + ')}
           </div>
         </div>
         <span style={{ fontSize:8.5, color:'#8A7CFF', fontWeight:800, fontFamily:"'JetBrains Mono',monospace" }}>{sources.length} {s.sourceTracks}</span>
+        <div style={{ width:28, height:28, flexShrink:0, display:'grid', placeItems:'center' }}>
+          <TileTypeIcon kind="folder" color="#8A7CFF" size={22}/>
+        </div>
       </div>
       {connectedLyrics.length > 0 && (
         <div style={{ position:'relative', zIndex:10, height:32, boxSizing:'border-box', flexShrink:0,
           margin:'-11px -14px 0', background:'#1A1218', borderBottom:'1px solid #2E1E26',
           padding:'6px 14px', display:'flex', alignItems:'center', gap:7 }}>
           <span style={{ fontSize:8, fontWeight:700, color:'#E56B8A', background:'#E56B8A18', border:'1px solid #E56B8A30', borderRadius:10, padding:'2px 6px', flexShrink:0, display:'inline-flex', alignItems:'center', gap:4 }}>
-            <span style={{ fontSize:9 }}>♪</span> 已连接歌词
+            <TileTypeIcon kind="lyrics" color="#E56B8A" size={10}/> {lang==='zh'?'已连接歌词':'Lyrics connected'}
           </span>
           <span style={{ flex:1, minWidth:0, fontSize:9.5, color:'#D8B0BE', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-            {connectedLyrics.map(n => String((n.data as any).title ?? '未命名歌词')).join(' · ')}
+            {connectedLyrics.map(n => localizeBuiltinText((n.data as any).title ?? '未命名歌词',lang)).join(' · ')}
           </span>
-          <span style={{ fontSize:8, color:'#8A5A6E', flexShrink:0 }}>{connectedLyrics.length} 首</span>
+          <span style={{ fontSize:8, color:'#8A5A6E', flexShrink:0 }}>{connectedLyrics.length} {lang==='zh'?'首':'tracks'}</span>
         </div>
       )}
 
@@ -139,9 +210,9 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
         gridTemplateRows:isTwoByTwo?'repeat(2,78px)':displaySources.length?'78px':'1fr',
         gap:8, flexShrink:0, overflowX:isTwoByTwo?'hidden':'auto', overflowY:isTwoByTwo?'auto':'hidden',
         paddingBottom:isTwoByTwo?2:0, minHeight:isTwoByTwo?164:displaySources.length?78:104, maxHeight:isTwoByTwo?180:undefined }}>
-        {displaySources.map(source=><div key={source.id} onPointerDown={e=>startDrag(e, source)} style={{ touchAction:'none', cursor:'grab' }}><SourcePreviewCard source={source} playing={playingId===source.id} onTogglePlay={()=>setPlayingId(playingId===source.id?null:source.id)} onRemove={()=>onRemoveSource?.(node.id, source.id)} /></div>) }
+        {displaySources.map(source=><div key={source.id} onPointerDown={e=>startDrag(e, source)} style={{ touchAction:'none', cursor:'grab' }}><SourcePreviewCard source={source} playing={playingId===source.id} onTogglePlay={()=>toggleSourcePlayback(source)} onRemove={()=>onRemoveSource?.(node.id, source.id)} /></div>) }
         {displaySources.length===0 && !isTwoByTwo && (
-          <div style={{ display:'grid', placeItems:'center', border:'1px dashed #2A2A28', borderRadius:9, color:'#3A3A38', fontSize:9 }}>拖入 Demo / 音频 / 作品</div>
+          <div style={{ display:'grid', placeItems:'center', border:'1px dashed #2A2A28', borderRadius:9, color:'#3A3A38', fontSize:9 }}>{lang==='zh'?'拖入 Demo / 音频 / 作品':'Drop a demo, audio, or track'}</div>
         )}
       </div>
 
@@ -150,7 +221,7 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
           const disabled=hasSingleSource && (item.id==='remix'||item.id==='mashup')
           return <button key={item.id} data-guide-target={`folder-mode-${item.id}-${node.id}`} disabled={disabled} onPointerDown={e=>e.stopPropagation()}
             onClick={e=>{e.stopPropagation();if(!disabled)set({mode:item.id})}}
-            title={disabled?'至少需要两个音频来源':undefined}
+            title={disabled?(lang==='zh'?'至少需要两个音频来源':'At least two audio sources are required'):undefined}
             style={{ height:29, borderRadius:7, cursor:disabled?'not-allowed':'pointer', fontSize:9.5, fontWeight:800,
               opacity:disabled ? .34 : 1,
               color:mode===item.id?'#fff':item.color, background:mode===item.id?item.color:item.color+'12',
@@ -162,7 +233,7 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
       <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, alignItems:'stretch' }}>
         <div style={{ background:'#0D0D12', border:'1px solid #1E1E1E', borderRadius:8, padding:'9px 10px 10px', display:'flex', flexDirection:'column', gap:7, minHeight:0, overflow:'hidden' }}>
           <div style={{ display:'flex', alignItems:'center', gap:7, minWidth:0 }}>
-            <span style={{ fontSize:10, fontWeight:750, color:'#D1D0D8', flexShrink:0 }}>取向象限</span>
+            <span style={{ fontSize:10, fontWeight:750, color:'#D1D0D8', flexShrink:0 }}>{lang==='zh'?'取向象限':'Orientation'}</span>
             <span style={{ marginLeft:'auto', display:'inline-flex', alignItems:'center', gap:7, fontSize:8, whiteSpace:'nowrap' }}>
               <span style={{ color:'#A99BFF' }}>{s.weirdness ?? '创意度'} <b style={{ color:'#E8E7F2', fontFamily:"'JetBrains Mono',monospace" }}>{String(Number(d.weirdness ?? 50))}%</b></span>
               <span style={{ color:'#68D6CE' }}>{s.styleInfluence ?? '风格影响'} <b style={{ color:'#E8E7F2', fontFamily:"'JetBrains Mono',monospace" }}>{String(Number(d.styleInfluence ?? 50))}%</b></span>
@@ -243,7 +314,7 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
             }} />
           </div>
         </div>
-        <textarea data-guide-target={`folder-prompt-${node.id}`} value={String(d.prompt ?? '')} placeholder={s.folderPromptPh}
+        <textarea data-guide-target={`folder-prompt-${node.id}`} value={localizeBuiltinText(d.prompt,lang)} placeholder={s.folderPromptPh}
         onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()}
         onChange={e=>set({prompt:e.target.value})}
         style={{ width:'100%', height:'100%', minHeight:45, resize:'none', borderRadius:8, padding:'8px 9px',
@@ -264,15 +335,17 @@ export function AudioFolderContent({ node, nodes, wires, onUpdateNodeData, onGen
   )
 }
 
-function sourceKindLabel(source:WorkSource) {
+function sourceKindLabel(source:WorkSource, lang:'zh'|'en') {
   if (source.kind === 'demo') return '30s DEMO'
   if (source.kind === 'work') return String((source as any).mode ?? 'WORK').toUpperCase()
-  if (source.kind === 'reference') return '参考音频'
-  if (source.kind === 'hum') return '哼唱片段'
+  if (source.kind === 'reference') return lang==='zh'?'参考音频':'Reference Audio'
+  if (source.kind === 'hum') return lang==='zh'?'小样':'Hum Clip'
   return source.kind.toUpperCase()
 }
 
 function SourcePreviewCard({source, playing, onTogglePlay, onRemove}:{source:WorkSource; playing?:boolean; onTogglePlay?:()=>void; onRemove?:()=>void}) {
+  const s=useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const isDemo = source.kind === 'demo'
   const isWork = source.kind === 'work'
   const accent = (source as any).accent as string | undefined
@@ -289,20 +362,21 @@ function SourcePreviewCard({source, playing, onTogglePlay, onRemove}:{source:Wor
   return <div style={{ minWidth:0, height:78, borderRadius:9, overflow:'hidden',
     border:border, background:bg, display:'flex', flexDirection:'column', position:'relative' }}>
     <div style={{ height:38, flexShrink:0, display:'flex', alignItems:'center', gap:7, padding:'0 10px', borderTop:`2px solid ${source.color}`, borderBottom:'1px solid #ffffff0D', background:'rgba(20,20,19,.72)' }}>
-      <span style={{ width:16,height:16,borderRadius:4,display:'grid',placeItems:'center',fontSize:8,
-        color:source.color,background:source.color+'14',border:`1px solid ${source.color}28` }}>{isDemo?'◈': isWork ? '✦' : '♫'}</span>
-      <strong style={{ flex:1,minWidth:0,fontSize:10,color:'#DAD9E2',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{source.name}</strong>
-      <span style={{ fontSize:8.5, fontWeight:800, color:source.color, background:source.color+'12', border:`1px solid ${source.color}38`, borderRadius:12, padding:'2px 7px', flexShrink:0 }}>{sourceKindLabel(source)}</span>
-      {onRemove && <button aria-label="移除" onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); onRemove()}} style={{ width:18, height:18, padding:0, border:0, background:'transparent', color:'#65636F', fontSize:14, lineHeight:'18px', cursor:'pointer', flexShrink:0 }}>×</button>}
+      <span style={{ width:16,height:16,display:'grid',placeItems:'center' }}>
+        <TileTypeIcon kind={isDemo?'demo':isWork?'work':source.kind==='reference'?'reference':source.kind==='hum'?'hum':'audio'} color={source.color} size={15}/>
+      </span>
+      <strong style={{ flex:1,minWidth:0,fontSize:10,color:'#DAD9E2',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{localizeBuiltinText(source.name,lang)}</strong>
+      <span style={{ fontSize:8.5, fontWeight:800, color:source.color, background:source.color+'12', border:`1px solid ${source.color}38`, borderRadius:12, padding:'2px 7px', flexShrink:0 }}>{sourceKindLabel(source,lang)}</span>
+      {onRemove && <button aria-label={lang==='zh'?'移除':'Remove'} onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); onRemove()}} style={{ width:18, height:18, padding:0, border:0, background:'transparent', color:'#65636F', fontSize:14, lineHeight:'18px', cursor:'pointer', flexShrink:0 }}>×</button>}
     </div>
     <div style={{ flex:1, minHeight:0, padding:'6px 8px', display:'flex', alignItems:'center', gap:7 }}>
-      <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); onTogglePlay?.()}}
+      <button data-guide-audio-control="1" onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); onTogglePlay?.()}}
         style={{ width:22,height:22,borderRadius:6,flexShrink:0,cursor:'pointer',display:'grid',placeItems:'center',
           background:source.color+'12',border:`1px solid ${source.color}28`,color:source.color,fontSize:9,lineHeight:1 }}>{playing?'Ⅱ':'▶'}</button>
       <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:3, overflow:'hidden' }}>
-        <div style={{ fontSize:9, color:'#9A9A9E', lineHeight:1.4, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{detailRow}</div>
+        <div style={{ fontSize:9, color:'#9A9A9E', lineHeight:1.4, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{localizeBuiltinText(detailRow,lang)}</div>
         <div style={{ display:'flex', justifyContent:'space-between', gap:6, fontSize:8, color:'#6A6A6E' }}>
-          <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1, minWidth:0 }}>{source.mood ?? source.duration ?? ''}</span>
+          <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1, minWidth:0 }}>{localizeBuiltinText(source.mood ?? source.duration,lang)}</span>
           {source.duration && <span style={{ flexShrink:0, fontFamily:"'JetBrains Mono',monospace", color:'#7A7A7E' }}>{source.duration}</span>}
         </div>
       </div>

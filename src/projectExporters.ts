@@ -2,6 +2,7 @@ import type { Lang } from './i18n'
 import type { CanvasNode, Wire } from './types'
 import { nodeThemeColor } from './theme'
 import { downloadNodeAudio, isAudioExportNode } from './components/canvas/exporters'
+import { localizeBuiltinText } from './contentI18n'
 
 export type ProjectExportKind = 'path' | 'audio' | 'lyrics' | 'archive' | 'project'
 
@@ -26,13 +27,13 @@ function downloadBlob(blob:Blob, fileName:string) {
   window.setTimeout(() => URL.revokeObjectURL(url),1000)
 }
 
-function nodeName(node:CanvasNode) {
+function nodeName(node:CanvasNode, lang:Lang) {
   const raw = String(node.data.name ?? node.data.title ?? node.data.label ?? node.data.fileName ?? node.id)
-  if (raw === '__HUM__') return '哼唱片段'
-  if (raw === '__REF__') return '参考音频'
-  if (node.type === 'frame') return '融合板'
-  if (node.type === 'audioFolder') return '音频创作夹'
-  return raw.replace(/__/g,'')
+  if (raw === '__HUM__') return lang==='zh'?'小样':'Hum Clip'
+  if (raw === '__REF__') return lang==='zh'?'参考音频':'Reference Audio'
+  if (node.type === 'frame') return lang==='zh'?'融合板':'Fusion Board'
+  if (node.type === 'audioFolder') return lang==='zh'?'音频创作夹':'Audio Studio'
+  return localizeBuiltinText(raw.replace(/__/g,''),lang)
 }
 
 function nodeTypeLabel(node:CanvasNode, lang:Lang) {
@@ -42,7 +43,7 @@ function nodeTypeLabel(node:CanvasNode, lang:Lang) {
   }
   const en:Record<string,string> = {
     image:'Image', audio:'Audio', text:'Text Intent', lyrics:'Lyrics', frame:'Fusion Board',
-    audioFolder:'Audio Studio Folder', direction:'30s Demo', work:'Track', result:'Track',
+    audioFolder:'Audio Studio', direction:'30s Demo', work:'Track', result:'Track',
   }
   return (lang === 'zh' ? zh : en)[node.type] ?? node.type
 }
@@ -77,24 +78,24 @@ function exportCreativePath(projectName:string, nodes:CanvasNode[], wires:Wire[]
   }).join('')
   const nodeSvg = visible.map(node => {
     const x=node.x+ox, y=node.y+oy, color=nodeThemeColor(node)
-    const title=xml(nodeName(node)), type=xml(nodeTypeLabel(node,lang))
+    const title=xml(nodeName(node,lang)), type=xml(nodeTypeLabel(node,lang))
     return `<g><rect x="${x}" y="${y}" width="${node.w}" height="${node.h}" rx="12" fill="#18181A" stroke="${color}" stroke-opacity=".6"/><rect x="${x}" y="${y}" width="4" height="${node.h}" rx="2" fill="${color}"/><text x="${x+18}" y="${y+27}" fill="#F1F1EE" font-size="14" font-weight="700" font-family="Inter,Arial,sans-serif">${title}</text><text x="${x+18}" y="${y+47}" fill="${color}" font-size="10" font-weight="700" font-family="Inter,Arial,sans-serif">${type}</text></g>`
   }).join('')
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs><pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#343432"/></pattern></defs><rect width="100%" height="100%" fill="#101010"/><rect width="100%" height="100%" fill="url(#dots)"/><text x="${padding}" y="42" fill="#F1F1EE" font-size="20" font-weight="800" font-family="Inter,Arial,sans-serif">${xml(projectName)}</text><text x="${padding}" y="61" fill="#71716D" font-size="10" font-family="Inter,Arial,sans-serif">MuseFlow · ${lang==='zh'?'创作路径':'Creative Path'}</text>${wireSvg}${nodeSvg}</svg>`
-  const fileName = `${safeFileName(projectName)}-创作路径.svg`
+  const fileName = `${safeFileName(projectName)}-${lang==='zh'?'创作路径':'creative-path'}.svg`
   downloadBlob(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),fileName)
   return fileName
 }
 
-function exportAllLyrics(projectName:string, nodes:CanvasNode[]) {
+function exportAllLyrics(projectName:string, nodes:CanvasNode[], lang:Lang) {
   const lyrics = nodes.filter(node => node.visible && node.type === 'lyrics')
   const body = lyrics.map(node => {
     const sections = (node.data.sections as Array<{label?:string;content?:string}>|undefined) ?? []
-    const sectionText = sections.map(section => `## ${String(section.label ?? '段落')}\n\n${String(section.content ?? '').trim() || '（空）'}`).join('\n\n')
-    return `# ${nodeName(node)}\n\n${sectionText}`
+    const sectionText = sections.map(section => `## ${localizeBuiltinText(section.label ?? (lang==='zh'?'段落':'Section'),lang)}\n\n${localizeBuiltinText(String(section.content ?? '').trim(),lang) || (lang==='zh'?'（空）':'(empty)')}`).join('\n\n')
+    return `# ${nodeName(node,lang)}\n\n${sectionText}`
   }).join('\n\n---\n\n')
-  const fileName = `${safeFileName(projectName)}-全部歌词.md`
-  downloadBlob(new Blob([`\uFEFF${body || '# 暂无歌词\n'}`],{type:'text/markdown;charset=utf-8'}),fileName)
+  const fileName = `${safeFileName(projectName)}-${lang==='zh'?'全部歌词':'all-lyrics'}.md`
+  downloadBlob(new Blob([`\uFEFF${body || (lang==='zh'?'# 暂无歌词\n':'# No lyrics\n')}`],{type:'text/markdown;charset=utf-8'}),fileName)
   return fileName
 }
 
@@ -104,19 +105,19 @@ function exportCreativeArchive(projectName:string, nodes:CanvasNode[], wires:Wir
     const data = node.data as Record<string,unknown>
     const sources = Array.isArray(data.sources) ? data.sources as Array<{name?:string}> : []
     const lines = [
-      `## ${nodeName(node)}`,
+      `## ${nodeName(node,lang)}`,
       `- ${lang==='zh'?'类型':'Type'}：${nodeTypeLabel(node,lang)}`,
       data.mode ? `- ${lang==='zh'?'生成方式':'Mode'}：${String(data.mode).toUpperCase()}` : '',
-      sources.length ? `- ${lang==='zh'?'来源素材':'Sources'}：${sources.map(source=>source.name ?? 'Untitled').join('、')}` : '',
+      sources.length ? `- ${lang==='zh'?'来源素材':'Sources'}：${sources.map(source=>localizeBuiltinText(source.name ?? 'Untitled',lang)).join(lang==='zh'?'、':', ')}` : '',
       data.weirdness !== undefined ? `- ${lang==='zh'?'创意度':'Creativity'}：${String(data.weirdness)}%` : '',
       data.styleInfluence !== undefined ? `- ${lang==='zh'?'风格影响':'Style influence'}：${String(data.styleInfluence)}%` : '',
-      data.prompt ? `- ${lang==='zh'?'创作要求':'Creative brief'}：${String(data.prompt)}` : '',
-      data.usedPrompt ? `\n### ${lang==='zh'?'生成指令':'Generation instruction'}\n\n\`\`\`\n${String(data.usedPrompt)}\n\`\`\`` : '',
+      data.prompt ? `- ${lang==='zh'?'创作要求':'Creative brief'}：${localizeBuiltinText(data.prompt,lang)}` : '',
+      data.usedPrompt ? `\n### ${lang==='zh'?'生成指令':'Generation instruction'}\n\n\`\`\`\n${localizeBuiltinText(data.usedPrompt,lang)}\n\`\`\`` : '',
     ].filter(Boolean)
     return lines.join('\n')
   }).join('\n\n')
   const header = `# ${projectName}\n\n${lang==='zh'?'MuseFlow 创作档案':'MuseFlow Creative Archive'}\n\n- ${lang==='zh'?'卡片':'Cards'}：${visible.length}\n- ${lang==='zh'?'连线':'Connections'}：${wires.length}\n- ${lang==='zh'?'导出时间':'Exported'}：${new Date().toLocaleString()}\n\n---\n\n`
-  const fileName = `${safeFileName(projectName)}-创作档案.md`
+  const fileName = `${safeFileName(projectName)}-${lang==='zh'?'创作档案':'creative-archive'}.md`
   downloadBlob(new Blob([`\uFEFF${header}${entries}`],{type:'text/markdown;charset=utf-8'}),fileName)
   return fileName
 }
@@ -143,7 +144,7 @@ export function getProjectExportCounts(nodes:CanvasNode[]):ProjectExportCounts {
 
 export function runProjectExport(kind:ProjectExportKind, projectName:string, nodes:CanvasNode[], wires:Wire[], lang:Lang) {
   if (kind === 'path') return exportCreativePath(projectName,nodes,wires,lang)
-  if (kind === 'lyrics') return exportAllLyrics(projectName,nodes)
+  if (kind === 'lyrics') return exportAllLyrics(projectName,nodes,lang)
   if (kind === 'archive') return exportCreativeArchive(projectName,nodes,wires,lang)
   if (kind === 'project') return exportProjectPackage(projectName,nodes,wires,lang)
   const audioNodes = nodes.filter(node => node.visible && isAudioExportNode(node))

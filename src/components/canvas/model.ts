@@ -16,6 +16,7 @@ export interface DemoItem {
   rhythm: string
   energy: number
   duration: string
+  audioUrl?: string
   usedPrompt: string
   recipe?: {
     mats: { name: string; weight: number; kind: string; isRef: boolean; fileName?: string }[]
@@ -34,6 +35,7 @@ export interface WorkItem {
   style: string
   energy: number
   duration: string
+  audioUrl?: string
   usedPrompt: string
   sources: WorkSource[]
   sourceRatios?: number[]
@@ -46,6 +48,7 @@ export interface WorkSource {
   kind:string
   color:string
   duration?:string
+  audioUrl?:string
   fileName?:string
   mood?:string
   style?:string

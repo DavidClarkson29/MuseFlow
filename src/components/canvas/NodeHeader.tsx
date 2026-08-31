@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLang } from '../../App'
 
 export function NodeHdr({ label, icon, accent, editable, onRename }: {
   label: string; icon?: React.ReactNode; accent?: string
   editable?: boolean; onRename?: (v: string) => void
 }) {
+  const s=useLang()
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState(label)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -34,10 +36,8 @@ export function NodeHdr({ label, icon, accent, editable, onRename }: {
     }}>
       {icon && (
         <div style={{
-          width:18, height:18, borderRadius:4, flexShrink:0,
-          background: accent ? accent+'20' : '#1E1E1C',
-          border:`1px solid ${accent ? accent+'40' : '#2C2C2A'}`,
-          display:'flex', alignItems:'center', justifyContent:'center', fontSize:10,
+          width:18, height:18, flexShrink:0, color:accent ?? '#8A8A86',
+          display:'flex', alignItems:'center', justifyContent:'center',
         }}>{icon}</div>
       )}
       {editing && editable ? (
@@ -55,7 +55,7 @@ export function NodeHdr({ label, icon, accent, editable, onRename }: {
       ) : (
         <span
           onClick={onLabelClick}
-          title={editable ? '再次点击重命名' : undefined}
+          title={editable ? (s.langToggle==='EN'?'再次点击重命名':'Click again to rename') : undefined}
           style={{ fontSize:11, fontWeight:600, color:'#7A7A76', letterSpacing:'-0.01em',
             cursor: editable ? 'text' : 'default', minWidth:0,
             overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</span>
@@ -63,4 +63,3 @@ export function NodeHdr({ label, icon, accent, editable, onRename }: {
     </div>
   )
 }
-

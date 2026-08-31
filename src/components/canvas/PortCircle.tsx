@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import type { Port } from '../../types'
+import { useLang } from '../../App'
 
 export function PortCircle({ port, isInput, visible, isSnapTarget, onPointerDown }: {
   port: Port; isInput: boolean; visible: boolean; isSnapTarget: boolean; onPointerDown: (e: React.PointerEvent) => void
 }) {
+  const s=useLang()
   const [hov, setHov] = useState(false)
   const opacity = !visible ? 0 : (isSnapTarget || hov ? 1 : 0.72)
   return (
@@ -12,7 +14,7 @@ export function PortCircle({ port, isInput, visible, isSnapTarget, onPointerDown
       onPointerDown={onPointerDown}
       onPointerEnter={() => setHov(true)}
       onPointerLeave={() => setHov(false)}
-      title={port.label + (isSnapTarget ? ' · 松开以连接' : '')}
+      title={port.label + (isSnapTarget ? (s.langToggle==='EN'?' · 松开以连接':' · Release to connect') : '')}
       style={{
         position:'absolute',
         left: isInput ? -8 : undefined,

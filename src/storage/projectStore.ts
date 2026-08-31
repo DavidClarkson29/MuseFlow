@@ -2,9 +2,10 @@ import type { Lang } from '../i18n'
 import type { CanvasNode, Wire } from '../types'
 
 const DB_NAME = 'museflow-local-projects'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const PROJECTS = 'projects'
 const ASSETS = 'assets'
+const BOARD_LIBRARY = 'board-library'
 
 export type ProjectSlot = 'autosave' | 'manual'
 export type ImportKind = 'auto' | 'image' | 'audio-hum' | 'audio-ref'
@@ -33,6 +34,7 @@ function openDb() {
       const db = request.result
       if (!db.objectStoreNames.contains(PROJECTS)) db.createObjectStore(PROJECTS)
       if (!db.objectStoreNames.contains(ASSETS)) db.createObjectStore(ASSETS)
+      if (!db.objectStoreNames.contains(BOARD_LIBRARY)) db.createObjectStore(BOARD_LIBRARY)
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
@@ -81,6 +83,14 @@ export async function saveProject(slot:ProjectSlot, nodes:CanvasNode[], wires:Wi
 
 export async function loadProject(slot:ProjectSlot) {
   return transact<ProjectSnapshot | undefined>(PROJECTS,'readonly',store=>store.get(slot))
+}
+
+export async function clearStoredWorkspace() {
+  await Promise.all([
+    transact(PROJECTS,'readwrite',store=>store.clear()),
+    transact(BOARD_LIBRARY,'readwrite',store=>store.clear()),
+    transact(ASSETS,'readwrite',store=>store.clear()),
+  ])
 }
 
 export async function hydrateProject(snapshot:ProjectSnapshot) {

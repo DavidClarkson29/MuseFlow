@@ -221,7 +221,7 @@ export function WorkDrawer({ node, onUpdateNodeData, onExtractWork, onWorkContex
         {(generating?[0,1]:displayWorks).map((item,index)=>{
           if(typeof item==='number')return <WorkSkeleton key={item} delay={item*110}/>
           const work=item as WorkItem
-          return <article key={work.id} className={leavingIds.includes(work.id)?'demo-out':'demo-pop'} onPointerDown={e=>start(e,work)}
+          return <article key={work.id} data-guide-target={`drawer-work-${work.id}`} className={leavingIds.includes(work.id)?'demo-out':'demo-pop'} onPointerDown={e=>start(e,work)}
             onContextMenu={e=>onWorkContextMenu?.(e,work)}
             style={{animationDelay:leavingIds.includes(work.id)?'0s':`${index*110}ms`,
               width:WORK_CARD_W,height:WORK_CARD_H,minWidth:0,cursor:'grab',touchAction:'none',position:'relative'}}>

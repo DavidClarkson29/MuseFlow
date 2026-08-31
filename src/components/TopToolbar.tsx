@@ -7,6 +7,7 @@ interface Props {
   lang: Lang
   onToggleLang: () => void
   onOpenGallery: () => void
+  onSearch: () => void
   projectName: string
   ambiguityLabel?: string
   ambiguityColor?: string
@@ -32,7 +33,7 @@ const MOCK_USER = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function TopToolbar({ lang, onToggleLang, onOpenGallery, projectName, ambiguityLabel, ambiguityColor,
+export default function TopToolbar({ lang, onToggleLang, onOpenGallery, onSearch, projectName, ambiguityLabel, ambiguityColor,
   onSaveProject, onRestoreProject, canRestoreProject, lastSavedAt, projectSaveState, testMode, onTestModeChange,
   exportCounts, onProjectExport }: Props) {
   const s = strings[lang]
@@ -217,7 +218,13 @@ export default function TopToolbar({ lang, onToggleLang, onOpenGallery, projectN
           <TBtn title={s.undo}><UndoIcon/></TBtn>
           <TBtn title={s.redo}><RedoIcon/></TBtn>
           <Sep/>
-          <TBtn title={s.search}><SearchIcon/></TBtn>
+          <TBtn title={s.search} onClick={() => {
+            setShowFileMenu(false)
+            setShowExportMenu(false)
+            setShowShareMenu(false)
+            setShowAvatarMenu(false)
+            onSearch()
+          }}><SearchIcon/></TBtn>
           <div ref={shareMenuRef} style={{ position:'relative' }}>
             <TBtn title={s.share} active={showShareMenu}
               onClick={() => { setShowShareMenu(v=>!v); setShowExportMenu(false); setShowAvatarMenu(false); setShowFileMenu(false) }}>

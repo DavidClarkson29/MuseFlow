@@ -1,4 +1,7 @@
 import type { CanvasNode } from '../../types'
+import { localizeBuiltinText } from '../../contentI18n'
+
+const currentLang=()=>document.documentElement.lang.toLowerCase().startsWith('zh')?'zh' as const:'en' as const
 
 function safeFileName(raw: string) {
   const clean = raw.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ')
@@ -6,11 +9,12 @@ function safeFileName(raw: string) {
 }
 
 function nodeName(node: CanvasNode) {
+  const lang=currentLang()
   const d = node.data
   const raw = String(d.name ?? d.title ?? d.label ?? d.fileName ?? node.id)
-  if (raw === '__HUM__') return '哼唱片段'
-  if (raw === '__REF__') return '参考音频'
-  return raw.replace(/__/g, '')
+  if (raw === '__HUM__') return lang==='zh'?'小样':'Hum Clip'
+  if (raw === '__REF__') return lang==='zh'?'参考音频':'Reference Audio'
+  return localizeBuiltinText(raw.replace(/__/g, ''),lang)
 }
 
 function triggerDownload(href: string, fileName: string, revoke = false) {
@@ -92,14 +96,15 @@ export function downloadNodeAudio(node: CanvasNode) {
 }
 
 export function exportNodeLyrics(node: CanvasNode) {
-  const title = safeFileName(String(node.data.title ?? '未命名歌词'))
+  const lang=currentLang()
+  const title = safeFileName(localizeBuiltinText(node.data.title ?? '未命名歌词',lang))
   const sections = (node.data.sections as Array<{label?:string; content?:string}> | undefined) ?? []
   const body = sections.map(section => {
-    const label = String(section.label ?? '段落').trim() || '段落'
-    const content = String(section.content ?? '').trim()
+    const label = localizeBuiltinText(section.label ?? (lang==='zh'?'段落':'Section'),lang).trim() || (lang==='zh'?'段落':'Section')
+    const content = localizeBuiltinText(String(section.content ?? '').trim(),lang)
     return `[${label}]${content ? `\n${content}` : ''}`
   }).join('\n\n')
-  const text = `# ${title}\n\n${body || '[歌词]\n'}`
+  const text = `# ${title}\n\n${body || (lang==='zh'?'[歌词]\n':'[Lyrics]\n')}`
   const url = URL.createObjectURL(new Blob([`\uFEFF${text}`], { type:'text/plain;charset=utf-8' }))
   const fileName = `${title}.txt`
   triggerDownload(url, fileName, true)

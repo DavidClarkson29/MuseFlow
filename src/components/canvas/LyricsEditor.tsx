@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import type { CanvasNode } from '../../types'
 import { useLang } from '../../App'
 import { NodeHdr } from './NodeHeader'
+import { TileTypeIcon } from '../TileTypeIcon'
+import { localizeBuiltinText } from '../../contentI18n'
 
 export function LyricsContent({ node, onUpdateNodeData, previewOpen: controlledPreviewOpen, onTogglePreview }: { node: CanvasNode; onUpdateNodeData: (id: string, patch: Record<string, unknown>) => void; previewOpen?: boolean; onTogglePreview?: () => void }) {
   const s = useLang()
+  const lang=s.langToggle==='EN'?'zh':'en'
   const sections = (node.data.sections as Array<{id:string, type:string, label:string, content:string}> | undefined) ?? []
-  const title = String(node.data.title ?? '未命名歌词')
+  const title = localizeBuiltinText(node.data.title ?? '未命名歌词',lang)
   const set = (patch: Record<string, unknown>) => onUpdateNodeData(node.id, patch)
   const presets: Array<{type:string, label:string, color:string}> = [
     { type:'intro', label:s.lyricIntro, color:'#8A8AFF' },
@@ -73,7 +76,7 @@ export function LyricsContent({ node, onUpdateNodeData, previewOpen: controlledP
   }
   return (
     <>
-      <NodeHdr label={title} icon="♪" accent="#E56B8A" editable onRename={v => set({ title: v })}/>
+      <NodeHdr label={title} icon={<TileTypeIcon kind="lyrics" color="#E56B8A" size={17}/>} accent="#E56B8A" editable onRename={v => set({ title: v })}/>
       <div style={{ flex:1, minHeight:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         <div style={{ padding:'7px 8px 6px', borderBottom:'1px solid #1E1E1E', background:'#141418' }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
@@ -96,7 +99,7 @@ export function LyricsContent({ node, onUpdateNodeData, previewOpen: controlledP
                 style={{ padding:'3px 7px', borderRadius:12, fontSize:8.5, fontWeight:600, cursor:'pointer',
                   background:p.color+'14', border:`1px solid ${p.color}30`, color:p.color }}>{p.label}</button>
             ))}
-            <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); addSection('custom','自定义')}}
+            <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); addSection('custom',lang==='zh'?'自定义':'Custom')}}
               style={{ padding:'3px 7px', borderRadius:12, fontSize:8.5, cursor:'pointer', background:'#1E1E1C', border:'1px dashed #2A2A28', color:'#8A8A86' }}>+ {s.lyricAddSection}</button>
           </div>
         </div>
@@ -177,7 +180,7 @@ export function LyricsContent({ node, onUpdateNodeData, previewOpen: controlledP
                       opacity:draggedId===sec.id?0.52:1, cursor:draggedId===sec.id?'grabbing':'grab' }}>
                     <span aria-hidden="true" style={{ color:active?'rgba(255,255,255,.72)':'#656560', fontSize:8, letterSpacing:-2, flexShrink:0 }}>⠿</span>
                     <span style={{ width:6, height:6, borderRadius:'50%', background:color, flexShrink:0, boxShadow: active ? `0 0 6px ${color}` : 'none' }}/>
-                    <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sec.label}</span>
+                    <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{localizeBuiltinText(sec.label,lang)}</span>
                     <span draggable={false} onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); removeSection(sec.id)}}
                       style={{ display:'grid', placeItems:'center', width:14, height:14, borderRadius:4, background: active ? 'rgba(0,0,0,0.18)' : '#2A2A28', color: active ? '#fff' : '#8A8A86', fontSize:10, lineHeight:1, flexShrink:0 }}>×</span>
                   </button>
@@ -192,8 +195,8 @@ export function LyricsContent({ node, onUpdateNodeData, previewOpen: controlledP
             ) : (
               <div style={{ flex:1, minHeight:0, display:'flex', flexDirection:'column', border:`1px solid ${(presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A')}28`, borderRadius:8, overflow:'hidden', background:'#19191E' }}>
                 <div style={{ display:'flex', alignItems:'center', gap:4, padding:'4px 6px', background:(presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A')+'0F', borderBottom:`1px solid ${(presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A')}18` }}>
-                  <span style={{ fontSize:8, fontWeight:800, padding:'2px 6px', borderRadius:10, background:(presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A')+'18', border:`1px solid ${(presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A')+'30'}`, color:presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A' }}>{selected.label}</span>
-                  <input value={selected.label} onChange={e=>updateSection(selected.id, { label: e.target.value })}
+                  <span style={{ fontSize:8, fontWeight:800, padding:'2px 6px', borderRadius:10, background:(presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A')+'18', border:`1px solid ${(presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A')+'30'}`, color:presets.find(p=>p.type===selected.type)?.color ?? '#E56B8A' }}>{localizeBuiltinText(selected.label,lang)}</span>
+                  <input value={localizeBuiltinText(selected.label,lang)} onChange={e=>updateSection(selected.id, { label: e.target.value })}
                     onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()}
                     style={{ flex:1, minWidth:0, background:'transparent', border:'none', outline:'none', color:'#C0C0BC', fontSize:9.5, fontWeight:600 }}/>
                   <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); const idx=sections.findIndex(s=>s.id===selected.id); moveSection(selected.id, -1); if(idx>0) setSelectedId(sections[idx-1].id)}} disabled={sections.findIndex(s=>s.id===selected.id)===0}
@@ -201,7 +204,7 @@ export function LyricsContent({ node, onUpdateNodeData, previewOpen: controlledP
                   <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation(); const idx=sections.findIndex(s=>s.id===selected.id); moveSection(selected.id, 1); if(idx<sections.length-1) setSelectedId(sections[idx+1].id)}} disabled={sections.findIndex(s=>s.id===selected.id)===sections.length-1}
                     style={{ width:18,height:18,display:'grid',placeItems:'center',background:'transparent',border:'1px solid #2A2A28',borderRadius:4,cursor:'pointer',color:'#8A8A86',fontSize:10,opacity:sections.findIndex(s=>s.id===selected.id)===sections.length-1?0.4:1 }}>↓</button>
                 </div>
-                <textarea value={selected.content} onChange={e=>updateSection(selected.id, { content: e.target.value })}
+                <textarea value={localizeBuiltinText(selected.content,lang)} onChange={e=>updateSection(selected.id, { content: e.target.value })}
                   onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()}
                   placeholder={s.lyricContentPh}
                   style={{ flex:1, minHeight:0, resize:'none', background:'#0F0F14', border:'none', outline:'none', color:'#C8C8E4', fontSize:11, lineHeight:1.7, padding:'8px 10px', fontFamily:"'Inter',sans-serif" }}/>
