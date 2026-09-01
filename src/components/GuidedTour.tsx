@@ -193,6 +193,7 @@ export default function GuidedTour({lang,nodes,wires,onFocusNode,onPrepareStep,o
     if(progress.step===8) return {id:GUIDE_REF_ID,selector:`[data-node-id="${GUIDE_REF_ID}"]`}
     if(progress.step===9 && lyrics)return {id:lyrics.id,selector:`[data-node-id="${lyrics.id}"]`}
     if(progress.step===9)return {id:GUIDE_REF_ID,selector:'[data-guide-target="create-lyrics"]',camera:false}
+    if(progress.step===10 && lyrics&&folder) return {id:folder.id,selector:`[data-node-id="${folder.id}"]`}
     if(progress.step===10 && lyrics) return {id:lyrics.id,selector:`[data-node-id="${lyrics.id}"]`}
     if(progress.step===11 && folder) return {id:folder.id,selector:`[data-node-id="${folder.id}"]`}
     if(progress.step===12 && canvasWork)return {id:canvasWork.id,selector:`[data-node-id="${canvasWork.id}"]`}
@@ -229,7 +230,7 @@ export default function GuidedTour({lang,nodes,wires,onFocusNode,onPrepareStep,o
     if(progress.step===8 && folder)return `[data-node-id="${folder.id}"]`
     if(progress.step===8 && canvasDemo)return `[data-node-id="${canvasDemo.id}"]`
     if(progress.step===9)return lyrics?`[data-node-id="${lyrics.id}"]`:'[data-guide-target="create-lyrics"]'
-    if(progress.step===10 && lyrics&&folder)return `[data-node-id="${lyrics.id}"],[data-node-id="${folder.id}"]`
+    if(progress.step===10 && lyrics&&folder)return `[data-node-id="${lyrics.id}"],[data-node-id="${folder.id}"],[data-wire-edge-for="${lyrics.id}"],[data-wire-edge-for="${folder.id}"]`
     if(progress.step===10 && lyrics)return `[data-node-id="${lyrics.id}"]`
     if(progress.step===11 && folder)return `[data-guide-target^="folder-generate-${folder.id}"]`
     if(progress.step===12 && canvasWork)return `[data-node-id="${canvasWork.id}"]`

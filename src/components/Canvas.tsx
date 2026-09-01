@@ -642,7 +642,7 @@ export default function Canvas({
           const x = ghost.isInput ? node.x : node.x + node.w
           const y = node.y + ghost.yRel
           return (
-            <button type="button" aria-label={langS.langToggle==='EN'?'拖动连接':'Drag to connect'} onPointerDown={handleGhostPointerDown}
+            <button type="button" aria-label={langS.langToggle==='EN'?'拖动连接':'Drag to connect'} data-wire-edge-for={ghost.nodeId} onPointerDown={handleGhostPointerDown}
               style={{ position:'absolute', left:x-8, top:y-22, width:16, height:44, padding:0,
                 border:0, outline:'none', background:'transparent', overflow:'visible',
                 cursor:'crosshair', zIndex:24, color:ghost.color, pointerEvents:'auto' }}>
